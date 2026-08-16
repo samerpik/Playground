@@ -21,3 +21,9 @@ never committed here; the notes are.
 | Repo | What it is | Verdict |
 |---|---|---|
 | [MoneyPrinterTurbo](repos/moneyprinterturbo/README.md) | AI short-video generator (TikTok/Reels/Shorts) | Clean — safe to run, worth using |
+
+## Things built with them
+
+| Project | Built with | Output |
+|---|---|---|
+| [Purple Luna teaser](projects/purple-luna-teaser/README.md) | Headless Chromium + ffmpeg, brand assets from `purple-luna-site` | 25.6s 1080×1920 vertical teaser |
