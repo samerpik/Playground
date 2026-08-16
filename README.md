@@ -1,0 +1,23 @@
+# Playground
+
+A place to try out GitHub repositories — install them, audit them, run them, and
+write down what they actually do and whether they're worth keeping.
+
+Each repo gets a folder under `repos/` with review notes. The upstream code is
+never committed here; the notes are.
+
+## What each review covers
+
+- **Verdict** — is there anything dodgy in it, and is it safe to run
+- **What it actually does** — in plain terms, not the marketing version
+- **Security review** — obfuscated code, telemetry, hardcoded credentials,
+  outbound domains, shell injection, path traversal, dependency health, CI
+- **Caveats** — the honest downsides that aren't security problems
+- **Verified working** — what was actually installed, tested, and run
+- **Running it yourself** — the shortest path to a working setup
+
+## Reviews
+
+| Repo | What it is | Verdict |
+|---|---|---|
+| [MoneyPrinterTurbo](repos/moneyprinterturbo/README.md) | AI short-video generator (TikTok/Reels/Shorts) | Clean — safe to run, worth using |
