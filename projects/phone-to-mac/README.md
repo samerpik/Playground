@@ -97,6 +97,37 @@ cd projects/phone-to-mac
 Then enable **System Settings → General → Sharing → Remote Login = ON**, and set
 *Allow access for* to your user only.
 
+## Check it works (runbook)
+
+Run the checker on the Mac after installing:
+
+```bash
+cd projects/phone-to-mac
+./doctor.sh
+```
+
+It verifies Remote Login, the dispatcher, the pinned key, a `ping`, and a
+reversible volume change, then lists the manual checks. Paste its output if
+anything fails.
+
+**First-run permission prompts are normal.** The first time an action drives
+another app, macOS shows a one-time prompt — approve it once and it sticks:
+
+- `app-open` / `app-close`, `playpause`, `restart` / `shutdown` → **Automation**
+- `screenshot` → **Screen Recording**
+- `volume`, `openurl`, `lock`, `sleep`, `ping` → no prompt
+
+Approve these while sitting at the Mac (run the command in Terminal or via the
+agent), because the prompt appears on the Mac's screen, not on the phone.
+
+Order to reach "working end to end":
+
+1. `./install.sh` (and turn on Remote Login)
+2. `./doctor.sh` → passes at the top
+3. `python3 agent.py --dry-run "lock the mac"` → shows the action, runs nothing
+4. `python3 agent.py "lock the mac"` → screen locks ← **agent path proven**
+5. iOS Shortcut sending `ping` → `OK <mac name>` ← **phone path proven**
+
 ## Set up the phone (iOS Shortcut)
 
 > UI wording moves between iOS versions; adapt as needed. I'm describing the

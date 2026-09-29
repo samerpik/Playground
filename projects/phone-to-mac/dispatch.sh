@@ -126,12 +126,18 @@ case "$action" in
     ;;
 
   lock)
-    /System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend \
-      && ok "locked"
+    CG="/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
+    if [ -x "$CG" ]; then
+      "$CG" -suspend >/dev/null 2>&1 && ok "locked"
+    fi
+    # fallback: sleep the display (locks if "require password immediately" is set)
+    pmset displaysleepnow >/dev/null 2>&1 && ok "locked (display sleep)"
     die "lock failed"
     ;;
 
   sleep)
+    # pmset needs no Automation permission; System Events is the fallback.
+    pmset sleepnow >/dev/null 2>&1 && ok "sleeping"
     osascript -e 'tell application "System Events" to sleep' && ok "sleeping"
     die "failed"
     ;;
