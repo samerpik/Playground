@@ -122,6 +122,60 @@ command="/Users/YOU/.phone-remote/dispatch.sh",restrict ssh-ed25519 AAAA...yourp
 
 (one line in `~/.ssh/authorized_keys`; replace `YOU` and the key).
 
+## Driving it with an AI agent (Claude API)
+
+The Shortcut runs *fixed* commands. If you'd rather talk naturally ("mute
+everything and open lofi on YouTube") and have a model choose the actions,
+`agent.py` puts Claude in front of the **same dispatcher** — nothing else touches
+the machine.
+
+```
+you: "set volume to 20 and open youtube lofi beats"
+        │
+        ▼
+   agent.py → Claude picks actions, ONLY from the allow-list enum
+        │        {volume 20}  {youtube lofi beats}
+        ▼
+   the same dispatch.sh (local, or SSH to another machine)
+```
+
+Why it stays safe with a model in the loop:
+
+- Claude can only pick from the fixed action enum (a strict tool schema) — it
+  can't invent an action or produce shell.
+- Every action is re-checked here and every argument is re-validated in
+  `dispatch.sh`. Worst case, a confused (or prompt-injected) model picks a
+  different *harmless* action; it can't read files or run commands.
+- `restart` / `shutdown` require an interactive confirmation.
+- v1 never feeds web pages or screen contents back to the model, so the only
+  thing steering it is the request you type. That keeps injection out of the loop.
+
+Setup:
+
+```bash
+cd projects/phone-to-mac
+pip install -r requirements.txt          # just the `anthropic` SDK
+export ANTHROPIC_API_KEY=sk-ant-...       # your key; never commit it
+cp config.example.json config.json        # edit targets; delete the 'office' example until you add a PC
+
+python3 agent.py --dry-run "lock the mac"          # shows the action, runs nothing
+python3 agent.py "set volume to 20 and open youtube lofi beats"
+python3 agent.py --yes "restart"                    # -y skips the confirm prompt
+```
+
+**Cost / model:** it defaults to `claude-opus-5-5`. This is a simple
+"map a sentence to an action" job, so **`claude-sonnet-5-5` or `claude-haiku-4-5`
+would be markedly cheaper per command and probably just as accurate** — your
+call. Change the `"model"` field in `config.json`. (I'm not stating a per-command
+price; check current Anthropic pricing.)
+
+**Wiring to voice later:** the phone Shortcut can `ssh` into the Mac and run
+`python3 .../agent.py "<dictated text>"`, so Siri dictation becomes the input.
+Get the CLI behaving first.
+
+Status: `agent.py` is syntax-checked and its allow-list is verified to match
+`dispatch.sh`. It's **not yet run against the live API** (needs your key + Mac).
+
 ## Removing a device instantly
 
 ```bash

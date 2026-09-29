@@ -1,1 +1,5 @@
 activity.log
+config.json
+__pycache__/
+*.pyc
+phone-remote-screenshot-*.png
