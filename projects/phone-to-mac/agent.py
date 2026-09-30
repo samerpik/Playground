@@ -204,9 +204,11 @@ def execute(config, action, value, target, auto_yes, dry_run):
 
 
 # --- agent loop ------------------------------------------------------------
-def run(config, request, auto_yes, dry_run):
+def run(config, request, auto_yes, dry_run, quiet=False):
     client = anthropic.Anthropic()
     messages = [{"role": "user", "content": request}]
+    printed = False
+    last_res = None
 
     for _ in range(6):  # safety cap on tool rounds
         try:
@@ -233,9 +235,12 @@ def run(config, request, auto_yes, dry_run):
         for b in resp.content:
             if b.type == "text" and b.text.strip():
                 print(b.text.strip())
+                printed = True
 
         tool_uses = [b for b in resp.content if b.type == "tool_use"]
         if resp.stop_reason != "tool_use" or not tool_uses:
+            if quiet and not printed and last_res:
+                print(last_res)
             return
 
         messages.append({"role": "assistant", "content": resp.content})
@@ -251,12 +256,17 @@ def run(config, request, auto_yes, dry_run):
             else:
                 res = execute(config, action, value, target, auto_yes, dry_run)
                 shown_target = target or config.get("default_target", "")
-                print(f"  → {action} {value} [{shown_target}]: {res}")
+                if not quiet:
+                    print(f"  → {action} {value} [{shown_target}]: {res}")
+            last_res = res
             results.append({"type": "tool_result", "tool_use_id": tu.id, "content": res})
 
         messages.append({"role": "user", "content": results})
 
-    print("(stopped: too many steps)")
+    if quiet and not printed and last_res:
+        print(last_res)
+    elif not quiet:
+        print("(stopped: too many steps)")
 
 
 def main():
@@ -264,10 +274,11 @@ def main():
     ap.add_argument("request", nargs="+", help="what you want done, in plain words")
     ap.add_argument("-y", "--yes", action="store_true", help="skip the confirm prompt for power actions")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show the actions, run nothing")
+    ap.add_argument("-q", "--quiet", action="store_true", help="print only the final result (for voice/SSH)")
     args = ap.parse_args()
 
     config = load_config()
-    run(config, " ".join(args.request), args.yes, args.dry_run)
+    run(config, " ".join(args.request), args.yes, args.dry_run, args.quiet)
 
 
 if __name__ == "__main__":
