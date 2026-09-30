@@ -56,7 +56,7 @@ MAX_ROUNDS = 8  # safety cap on model rounds within one turn
 
 # --- config ----------------------------------------------------------------
 DEFAULT_CONFIG = {
-    "model": "claude-opus-5-5",
+    "model": "claude-sonnet-5-5",
     "default_target": "mac",
     "targets": {
         # local = run dispatch.sh on this machine; ssh = reach another machine.

@@ -1,0 +1,13 @@
+{
+  "_comment": "One-time seed applied on first run by apply_starter() in server.py. It only ADDS lines and swaps the untouched placeholder intro; it never edits or deletes what you write. Every note below is drawn from your own repo (projects/purple-luna-teaser/README.md) — nothing here is invented. GTA videos and Cat Instagram are left blank on purpose: there's nothing about them in the repo yet, so the coach will ask you to brief it. Delete ~/.focus-coach/.starter-v1-applied to re-apply after editing.",
+  "date": "2026-09-30",
+  "intro": "I'm juggling a few things at once: Purple Luna and its clients, GTA videos, and a cat Instagram — and I keep having new ideas. Help me hold the whole picture, pick what matters most this week, and actually finish things instead of starting more. Be direct; don't let me over-polish or chase every shiny new idea.",
+  "notes": [
+    {"section": "Purple Luna", "note": "Purple Luna is a small studio in Brighton building AI agents for service businesses."},
+    {"section": "Purple Luna", "note": "The product, Luna, answers a business's WhatsApp in seconds and books customers 24/7 — zero commission, every booking stays theirs."},
+    {"section": "Purple Luna", "note": "A 25.6s vertical teaser (purple-luna-teaser.mp4, for TikTok/Reels/Shorts) is built and cut to work silent with captions."},
+    {"section": "Purple Luna", "note": "Before posting the teaser: swap the placeholder music for a track I'm licensed to use publicly."},
+    {"section": "Purple Luna", "note": "Before posting the teaser: the end card shows the domain only — add the live wa.me number if I want chats rather than clicks."},
+    {"section": "Purple Luna", "note": "Optional next step for the teaser: add a voiceover. Three takes (Isla, Nadine, Celine) are already generated in Higgsfield; pick one and let MoneyPrinterTurbo add word-timed subtitles."}
+  ]
+}

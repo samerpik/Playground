@@ -196,11 +196,12 @@ python3 agent.py "set volume to 20 and open youtube lofi beats"
 python3 agent.py --yes "restart"                    # -y skips the confirm prompt
 ```
 
-**Cost / model:** it defaults to `claude-opus-5-5`. `claude-sonnet-5-5` is the
-cheaper option that works with the current settings (about half the per-token
-price in the price table I had; check Anthropic's pricing page for today's
-numbers). Switch with the `"model"` field in `config.json`, or try one run with
-`--model claude-sonnet-5-5`. **Not Haiku:** `claude-haiku-4-5` rejects the
+**Cost / model:** it defaults to `claude-sonnet-5-5` — the cheaper of the two
+models that work with the current settings (about half Opus's per-token price
+in the price table I had; check Anthropic's pricing page for today's numbers).
+If you want maximum quality over cost, switch the `"model"` field in
+`config.json` to `claude-opus-5-5`, or try one run with `--model
+claude-opus-5-5`. **Not Haiku:** `claude-haiku-4-5` rejects the
 adaptive-thinking and effort settings this agent sends, so it needs code changes
 first.
 
@@ -255,7 +256,7 @@ allow-list.
 echo "alias jarvis='mac --talk'" >> ~/.zshrc && source ~/.zshrc
 
 jarvis                                   # start talking
-jarvis --model claude-sonnet-5-5         # same, on a different model
+jarvis --model claude-opus-5-5           # same, on the dearer model
 ```
 
 Speak into your dictation tool (or type) and press Enter. It answers aloud and

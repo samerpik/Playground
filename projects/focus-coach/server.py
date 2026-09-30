@@ -42,12 +42,13 @@ CONFIG_PATH = os.path.join(DATA, "config.json")
 
 DEFAULTS = {
     "model": "claude-haiku-4-5",  # small and cheap; use "claude-sonnet-5-5" for deeper coaching
-    "max_tokens": 300,            # replies are spoken, so short
+    "max_tokens": 250,            # replies are spoken, so short (a briefing gets more room)
     "keep_turns": 12,             # earlier exchanges sent along with each new message; older ones are dropped (notes stay)
     "daily_cap_usd": 1.00,        # stop calling the model past this estimated daily spend
     "port": 8765,
     "lang": None,                 # speech recognition language, e.g. "en-GB"; None = the browser's
     "prices": {},                 # {"model": [input, output]} in $ per million tokens; overrides PRICES
+    "edge_voice": "en-US-EmmaMultilingualNeural",  # the free natural voice used if `edge-tts` is installed
 }
 
 # $ per million tokens (input, output). From the price table I had (dated 2026-09-25);
@@ -57,6 +58,9 @@ PRICES = {
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
 }
+STARTER_PATH = os.path.join(HERE, "starter_notes.json")
+STARTER_MARK = os.path.join(DATA, ".starter-v1-applied")
+DEFAULT_INTRO = "Anything the coach should always know: what I'm aiming for this month, what matters most, how I like to be coached."
 MAX_NOTES_CHARS = 24000  # beyond this only the most recent notes are sent (and the page says so)
 
 PERSONA = """You are the user's personal focus coach, talking with them out loud. Their attention is the most expensive resource they have; your job is to help them choose what deserves it and to keep them moving.
@@ -71,11 +75,13 @@ How to coach:
 - Ask one question at a time. Aim for the single highest-leverage next step.
 - Small problems that don't affect clients, revenue or the main goal go on the backlog.
 
-Speaking: your reply is read aloud, so use 1-3 short sentences. No markdown, lists, headings, emoji or URLs. The text comes from speech recognition, so expect small mishearings and infer the obvious meaning.
+Speaking: your reply is read aloud. Keep it to two short sentences at most (under 35 words) and at most one question, unless they ask for detail. No markdown, lists, headings, emoji or URLs. The right length looks like: "What would you drop this week to finish the client videos?" or "Park it. You already have an unfinished video, so finish that first." The text comes from speech recognition, so expect small mishearings and infer the obvious meaning.
 
 Saving: when the user gives you a new idea, makes a decision, or gives a status update (for example a client deadline), call save_note with a short line in their own words. Never save your own advice. Say your spoken reply in the same message as the save. You can only save notes: you cannot browse the web, set reminders or control the computer, so don't offer to."""
 
-ONBOARDING = """Their notes are still empty. Start by asking, one question at a time, about each area in the notes: what the goal is, what the next step is and any deadline. Save each answer with save_note as you go."""
+GAPS = """Nothing is saved yet for: {names}. Early on, when it fits, ask about these one at a time (the goal, the next step, any deadline) and save the answers. If they'd rather just talk it through, suggest the Brief me button."""
+
+BRIEFING = """The user is briefing you on their week. Do not coach or give opinions now: listen. Save every distinct fact, idea, decision, deadline or status with save_note, one short line per fact in their own words, under the right area, calling save_note once per fact, all in the same message. Then reply in at most eight words (for example: "Got it. What else?"). If something is unclear, ask one short question instead of guessing."""
 
 QUICK = re.compile(r"^\s*(idea|note)\s*[:,\-]\s*(.+)$", re.IGNORECASE | re.DOTALL)
 HEADING = re.compile(r"^##\s+(.+?)\s*$")
@@ -147,8 +153,21 @@ def sections(text):
     return names or ["Ideas"]
 
 
-def has_notes(text):
-    return any(NOTE_LINE.match(line) for line in strip_comments(text).splitlines())
+def note_counts(text):
+    """{section: number of notes}, in the order the sections appear (hint comments ignored)."""
+    counts, cur = {}, None
+    for line in strip_comments(text).splitlines():
+        if m := HEADING.match(line):
+            cur = m.group(1)
+            counts.setdefault(cur, 0)
+        elif cur and NOTE_LINE.match(line):
+            counts[cur] += 1
+    return counts
+
+
+def empty_sections(text):
+    """Areas with nothing saved yet. Ideas is a capture list, so it doesn't count."""
+    return [name for name, n in note_counts(text).items() if n == 0 and name.lower() != "ideas"]
 
 
 def append_note(section, note, today=None):
@@ -186,28 +205,74 @@ def _join(names):
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
+def _short(note, limit=80):
+    """Cut at a word boundary, for speaking."""
+    note = " ".join(note.split())
+    if len(note) <= limit:
+        return note
+    return note[:limit].rsplit(" ", 1)[0].rstrip(",;:.") + "…"
+
+
 def brief(text):
     """A free, spoken reminder built from the notes (no model call)."""
-    counts, recent, cur = {}, [], None
-    for line in strip_comments(text).splitlines():
-        if m := HEADING.match(line):
-            cur = m.group(1)
-            counts.setdefault(cur, 0)
-        elif cur and (n := NOTE_LINE.match(line)):
-            counts[cur] += 1
-            recent.append((n.group(1) or "", cur, n.group(2)))
+    counts = note_counts(text)
     if not counts:
         return "Your notes have no sections yet. Add some in the notes panel, then tell me what you're juggling."
     parts = [f"You're juggling {len(counts)} thing{'s' if len(counts) != 1 else ''}: {_join(list(counts))}."]
-    total = sum(counts.values())
-    if total == 0:
-        parts.append("Nothing is saved yet. Tell me about each one and I'll keep track.")
+    gaps = empty_sections(text)
+    if gaps:
+        parts.append(f"I know nothing yet about {_join(gaps)}. "
+                     f"Tap Brief me and tell me about {'it' if len(gaps) == 1 else 'them'}.")
     else:
+        recent, cur = [], None
+        for line in strip_comments(text).splitlines():
+            if m := HEADING.match(line):
+                cur = m.group(1)
+            elif cur and cur.lower() != "ideas" and (n := NOTE_LINE.match(line)):
+                recent.append((n.group(1) or "", cur, n.group(2)))
         recent.sort(key=lambda r: r[0], reverse=True)  # newest first; stable for equal dates
-        latest = "; ".join(f"{sec}: {note[:90]}" for _, sec, note in recent[:2])
-        parts.append(f"{total} note{'s' if total != 1 else ''} saved. Latest, {latest}.")
+        if recent:
+            parts.append("Latest, " + "; ".join(f"{sec}: {_short(note)}" for _, sec, note in recent[:2]) + ".")
+    ideas = next((n for name, n in counts.items() if name.lower() == "ideas"), 0)
+    if ideas:
+        parts.append(f"{ideas} idea{'s' if ideas != 1 else ''} parked.")
     parts.append("Tap or hold space and tell me where you want to start.")
     return " ".join(parts)
+
+
+def tidy(reply, cut_off):
+    """For speaking: no blank-line gaps, and if the token limit cut the reply off, end on a full sentence."""
+    reply = re.sub(r"\n\s*\n+", "\n", reply).strip()
+    if cut_off and reply and reply[-1] not in ".!?":
+        end = max(reply.rfind(c) for c in ".!?")
+        if end > 0:
+            reply = reply[: end + 1]
+    return reply
+
+
+def apply_starter():
+    """Once: fill in what is known from the user's own repo (starter_notes.json).
+
+    Only adds lines (and swaps the untouched placeholder intro); never removes or
+    rewrites anything the user wrote. Returns how many notes were added.
+    """
+    if os.path.exists(STARTER_MARK) or not os.path.exists(STARTER_PATH):
+        return 0
+    with open(STARTER_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    with NOTES_LOCK:
+        text = read_notes()
+        if data.get("intro") and DEFAULT_INTRO in text:
+            write_notes(text.replace(DEFAULT_INTRO, data["intro"]))
+    stamp = date.fromisoformat(data["date"])
+    added = 0
+    for item in data.get("notes", []):
+        if " ".join(item["note"].split()) not in read_notes():
+            ok, _ = append_note(item["section"], item["note"], today=stamp)
+            added += 1 if ok else 0
+    with open(STARTER_MARK, "w", encoding="utf-8") as f:
+        f.write("applied\n")
+    return added
 
 
 def trim(history, keep_turns):
@@ -290,22 +355,27 @@ class Coach:
         self.lock = threading.Lock()
         self.usage = Usage(cfg)
 
-    def system(self):
+    def system(self, briefing=False):
         text = strip_comments(read_notes()).strip()
         if len(text) > MAX_NOTES_CHARS:
             text = "[older notes omitted]\n" + text[-MAX_NOTES_CHARS:]
         parts = [PERSONA, "Today is " + date.today().strftime("%A %d %B %Y") + ".",
                  "<notes>\n" + text + "\n</notes>"]
-        if not has_notes(text):
-            parts.append(ONBOARDING)
+        if briefing:
+            parts.append(BRIEFING)
+        elif empty_sections(text):
+            parts.append(GAPS.format(names=_join(empty_sections(text))))
         return "\n\n".join(parts)
 
     def reset(self):
         with self.lock:
             self.history.clear()
 
-    def chat(self, text):
-        """One spoken turn. Returns {"reply", "saved": [...], ...}. SDK errors propagate."""
+    def chat(self, text, mode="coach"):
+        """One spoken turn. mode "brief" is a brain-dump: it saves what you say and keeps quiet.
+
+        Returns {"reply", "saved": [...], ...}. SDK errors propagate.
+        """
         text = text.strip()
         if not text:
             return {"reply": "", "saved": []}
@@ -325,14 +395,17 @@ class Coach:
             trim(self.history, int(self.cfg["keep_turns"]))
             mark = len(self.history)
             self.history.append({"role": "user", "content": text})
-            saved, reply = [], ""
+            saved, reply, last_stop = [], "", ""
+            briefing = mode == "brief"
+            max_tokens = max(int(self.cfg["max_tokens"]), 900) if briefing else int(self.cfg["max_tokens"])
             try:
-                system = self.system()
+                system = self.system(briefing)
                 tool = save_tool(sections(read_notes()))
-                for _ in range(3):
+                for _ in range(5 if briefing else 3):
                     resp = self.client.messages.create(
-                        model=self.cfg["model"], max_tokens=int(self.cfg["max_tokens"]),
+                        model=self.cfg["model"], max_tokens=max_tokens,
                         system=system, tools=[tool], messages=self.history)
+                    last_stop = resp.stop_reason
                     self.usage.add(self.cfg["model"], resp.usage)
                     tool_uses = [b for b in resp.content if b.type == "tool_use"]
                     if resp.stop_reason == "refusal" or (tool_uses and resp.stop_reason != "tool_use"):
@@ -357,11 +430,12 @@ class Coach:
                             out = "Unknown tool."
                         results.append({"type": "tool_result", "tool_use_id": tu.id, "content": out})
                     self.history.append({"role": "user", "content": results})
-                else:  # still asking for tools after 3 rounds: end on an assistant turn
+                else:  # still asking for tools after the last round: end on an assistant turn
                     self.history.append({"role": "assistant", "content": [{"type": "text", "text": "(stopped)"}]})
             except BaseException:
                 del self.history[mark:]
                 raise
+        reply = tidy(reply, last_stop == "max_tokens")
         if not reply:
             reply = "Saved." if saved else "(no reply)"
         return {"reply": reply, "saved": saved}
@@ -377,10 +451,50 @@ def api_error_text(e):
     return str(getattr(e, "message", e))
 
 
+EDGE_VOICES = [
+    ("en-US-EmmaMultilingualNeural", "Emma (US)"),
+    ("en-US-AvaMultilingualNeural", "Ava (US)"),
+    ("en-GB-SoniaNeural", "Sonia (UK)"),
+    ("en-GB-RyanNeural", "Ryan (UK)"),
+    ("en-US-AndrewMultilingualNeural", "Andrew (US)"),
+]
+EDGE_VOICE = re.compile(r"^[a-z]{2,3}-[A-Z]{2}-[A-Za-z]+Neural$")
+
+
+def edge_available():
+    try:
+        import edge_tts  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def synth_edge(text, voice):
+    """Speech (mp3) from Microsoft's free online neural voices, through the edge-tts package."""
+    import asyncio
+    import edge_tts
+
+    async def go():
+        audio = bytearray()
+        async for chunk in edge_tts.Communicate(text, voice).stream():
+            if chunk.get("type") == "audio":
+                audio.extend(chunk["data"])
+        if not audio:
+            raise RuntimeError("no audio came back")
+        return bytes(audio)
+
+    return asyncio.run(asyncio.wait_for(go(), 25))
+
+
 def state_payload(coach):
     text = read_notes()
     today = coach.usage.today()
+    default = coach.cfg["edge_voice"]
+    voices = [{"id": i, "label": l} for i, l in EDGE_VOICES]
+    if default not in [v["id"] for v in voices]:
+        voices.insert(0, {"id": default, "label": default})
     return {
+        "tts": {"edge": edge_available(), "voices": voices, "default": default},
         "notes": text, "sections": sections(text), "brief": brief(text), "model": coach.cfg["model"],
         "cost": {"usd": round(today["usd"], 5), "turns": today["turns"], "cap": coach.cfg["daily_cap_usd"]},
         "notes_chars": len(text), "notes_truncated": len(strip_comments(text).strip()) > MAX_NOTES_CHARS,
@@ -396,7 +510,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, status, body, ctype="application/json", extra=None):
         data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype != "application/json" else ""))
+        self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith("text/") else ""))
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -428,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
             page = (self.server.page.replace("__TOKEN__", self.server.token)
                     .replace("__NONCE__", nonce).replace("__CONF__", conf)).encode("utf-8")
             csp = ("default-src 'none'; script-src 'nonce-%s'; style-src 'nonce-%s'; connect-src 'self'; "
-                   "base-uri 'none'; form-action 'none'; frame-ancestors 'none'" % (nonce, nonce))
+                   "media-src blob: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" % (nonce, nonce))
             return self._send(200, page, "text/html", {"Content-Security-Policy": csp, "X-Frame-Options": "DENY"})
         if path == "/api/state":
             if not self._allowed(True):
@@ -452,17 +566,29 @@ class Handler(BaseHTTPRequestHandler):
         coach = self.server.coach
 
         if path == "/api/chat":
-            text = body.get("text")
-            if not isinstance(text, str) or len(text) > 4000:
+            text, mode = body.get("text"), body.get("mode", "coach")
+            if not isinstance(text, str) or len(text) > 8000 or mode not in ("coach", "brief"):
                 return self._send(400, {"error": "bad request"})
             try:
-                result = coach.chat(text)
+                result = coach.chat(text, mode)
             except anthropic.AuthenticationError:
                 return self._send(502, {"error": "Your Anthropic API key was rejected. Check the key saved for the mac command."})
             except anthropic.APIError as e:
                 return self._send(502, {"error": f"Claude API error: {api_error_text(e)}"})
             result["state"] = state_payload(coach)
             return self._send(200, result)
+        if path == "/api/tts":
+            if not edge_available():
+                return self._send(501, {"error": "the natural voice isn't installed"})
+            text, voice = body.get("text"), body.get("voice") or coach.cfg["edge_voice"]
+            if (not isinstance(text, str) or not text.strip() or len(text) > 800
+                    or not isinstance(voice, str) or not EDGE_VOICE.match(voice)):
+                return self._send(400, {"error": "bad request"})
+            try:
+                audio = synth_edge(text.strip(), voice)
+            except Exception as e:  # network, timeout, a voice the service doesn't know...
+                return self._send(502, {"error": f"the voice service failed ({type(e).__name__})"})
+            return self._send(200, audio, "audio/mpeg")
         if path == "/api/reset":
             coach.reset()
             return self._send(200, {"ok": True})
@@ -509,6 +635,7 @@ def open_browser(url):
 def main():
     cfg = load_config()
     ensure_notes()
+    added = apply_starter()
     if not ensure_api_key():
         print("!  No Anthropic API key found (environment, or ~/.phone-remote/agent.env). "
               "Chat will fail until one is set.")
@@ -516,6 +643,10 @@ def main():
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     print(f"Focus coach is running: {url}")
     print(f"  model: {cfg['model']} · notes: {NOTES_PATH}")
+    if added:
+        print(f"  Added {added} starter notes from your repo. Check the Notes panel; edit or delete anything wrong.")
+    if not edge_available():
+        print("  Voice: built-in Mac voices. For a free, more natural one: pip install edge-tts (see the README).")
     print("  Press Ctrl+C here (or close this window) to stop it.")
     threading.Timer(0.6, open_browser, args=(url,)).start()
     try:

@@ -66,6 +66,7 @@ aside header{padding:0}
     <h1>Focus</h1>
     <span id="cost" title="Estimated spend today. Your Anthropic console has the exact figure."></span>
     <span class="spacer"></span>
+    <button id="btnBrief" type="button" title="Tell me about your week — I'll just listen and save, not coach.">Brief me</button>
     <button id="btnNotes" type="button">Notes</button>
     <button id="btnReset" type="button">New chat</button>
   </header>
@@ -118,7 +119,8 @@ const CONF = JSON.parse($('conf').textContent || '{}');
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const synth = window.speechSynthesis;
 const S = { started:false, listening:false, cancelled:false, busy:false, speaking:false,
-            heldAt:0, finalText:'', interim:'', lastError:'', brief:'', rec:null, editing:false };
+            heldAt:0, finalText:'', interim:'', lastError:'', brief:'', rec:null, editing:false,
+            briefing:false, tts:{edge:false,voices:[],default:''}, audio:null, speakId:0, voicesReady:false };
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (_) { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
@@ -159,6 +161,8 @@ function money(u) { if (u >= 1) return '$' + u.toFixed(2); const c = u * 100; re
 function applyState(st) {
   if (!st) return;
   S.brief = st.brief;
+  if (st.tts) S.tts = st.tts;
+  if (!S.voicesReady) { setupVoices(); S.voicesReady = true; }   // edge or browser, decided once
   $('briefText').textContent = st.brief;
   $('cost').textContent = 'Today ≈ ' + money(st.cost.usd) + ' · ' + st.cost.turns + (st.cost.turns === 1 ? ' call' : ' calls') + ' · ' + st.model;
   $('notesView').textContent = st.notes;
@@ -169,36 +173,91 @@ function applyState(st) {
 }
 
 // ---- speaking ---------------------------------------------------------------
-function fillVoices() {
-  if (!synth) return;
+// Two engines: edge-tts (free natural neural voices, served by the local server at
+// /api/tts) when it's installed, otherwise the browser's own voices. The picker holds
+// whichever set is in use. Edge routes through the server and returns an mp3 to play.
+const usingEdge = () => S.tts.edge && S.tts.voices.length > 0;
+const NOVELTY = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Junior|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Ralph|Fred|Kathy|Flo\b|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley|Eddy)/i;
+function bestBrowserVoice() {
+  if (!synth) return null;
   const lang = (CONF.lang || navigator.language || 'en').slice(0, 2).toLowerCase();
-  const score = v => (v.lang && v.lang.toLowerCase().startsWith(lang) ? 10 : 0) + (/premium|enhanced/i.test(v.name) ? 5 : 0) + (v.default ? 1 : 0);
-  const list = [...synth.getVoices()].sort((a, b) => score(b) - score(a));
+  const score = v => (v.lang && v.lang.toLowerCase().startsWith(lang) ? 10 : 0)
+    + (/premium|enhanced|natural|siri/i.test(v.name) ? 6 : 0)
+    + (NOVELTY.test(v.name) ? -20 : 0) + (v.default ? 1 : 0);
+  return [...synth.getVoices()].sort((a, b) => score(b) - score(a))[0] || null;
+}
+function setupVoices() {
   const sel = $('voice');
   sel.textContent = '';
+  if (usingEdge()) {
+    S.tts.voices.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label; sel.appendChild(o); });
+    const saved = store.get('focus.voice.edge', '');
+    sel.value = (saved && S.tts.voices.some(v => v.id === saved)) ? saved : S.tts.default;
+    return;
+  }
+  if (!synth) return;
+  const best = bestBrowserVoice();
+  const list = [...synth.getVoices()].sort((a, b) => (b === best) - (a === best));   // best first, rest as-is
   list.forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name + ' (' + v.lang + ')'; sel.appendChild(o); });
   const saved = store.get('focus.voice', '');
   if (saved && list.some(v => v.name === saved)) sel.value = saved;
 }
-function chosenVoice() { return synth ? (synth.getVoices().find(v => v.name === $('voice').value) || null) : null; }
-function speak(text) {
-  if (!synth || !$('speakOn').checked || !text) return;
+function chosenBrowserVoice() {
+  if (!synth) return null;
+  if (!usingEdge()) return synth.getVoices().find(v => v.name === $('voice').value) || bestBrowserVoice();
+  return bestBrowserVoice();
+}
+async function speak(text) {
+  if (!$('speakOn').checked || !text) return;
+  stopSpeaking();
+  const id = ++S.speakId;
+  if (usingEdge()) {
+    S.speaking = true;
+    pill('speaking', 'Speaking… (Space to interrupt)');
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'X-Focus-Token': TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: $('voice').value }),
+      });
+      if (!res.ok) throw new Error('tts ' + res.status);
+      const blob = await res.blob();
+      if (id !== S.speakId) return;                        // interrupted while fetching
+      const url = URL.createObjectURL(blob);
+      const a = new Audio(url);
+      S.audio = a;
+      a.onended = a.onerror = () => { URL.revokeObjectURL(url); if (S.audio === a) { S.audio = null; S.speaking = false; if (!S.listening && !S.busy) idle(); } };
+      a.play().catch(() => { if (id === S.speakId) speakBrowser(text, id); });
+      return;
+    } catch (_) {
+      if (id !== S.speakId) return;                        // fall through to the browser voice
+    }
+  }
+  speakBrowser(text, id);
+}
+function speakBrowser(text, id) {
+  if (!synth) { S.speaking = false; if (!S.listening && !S.busy) idle(); return; }
   synth.cancel();
   const chunks = (text.match(/[^.!?\n]+[.!?]*\s*/g) || [text]).map(s => s.trim()).filter(Boolean);
   S.speaking = true;
   pill('speaking', 'Speaking… (Space to interrupt)');
+  const v = chosenBrowserVoice();
   chunks.forEach((c, i) => {
     const u = new SpeechSynthesisUtterance(c);
-    const v = chosenVoice();
     if (v) u.voice = v;
     u.rate = 1.05;
     if (i === chunks.length - 1) {
-      u.onend = u.onerror = () => { S.speaking = false; if (!S.listening && !S.busy) idle(); };
+      u.onend = u.onerror = () => { if (id === S.speakId) { S.speaking = false; if (!S.listening && !S.busy) idle(); } };
     }
     synth.speak(u);
   });
 }
-function stopSpeaking() { if (synth) synth.cancel(); S.speaking = false; }
+function stopSpeaking() {
+  S.speakId++;                                             // invalidate any in-flight speak
+  if (synth) synth.cancel();
+  if (S.audio) { try { S.audio.pause(); } catch (_) {} S.audio.src = ''; S.audio = null; }
+  S.speaking = false;
+}
 
 // ---- listening ----------------------------------------------------------------
 const ERRORS = {
@@ -255,7 +314,7 @@ async function send(text) {
   pill('thinking', 'Thinking…');
   $('text').disabled = true;
   try {
-    const r = await api('/api/chat', { text });
+    const r = await api('/api/chat', { text, mode: S.briefing ? 'brief' : 'coach' });
     if (r.reply) bubble('ai', r.reply, r.saved);
     applyState(r.state);
     if (r.reply) speak(r.reply);
@@ -295,7 +354,7 @@ addEventListener('keyup', e => {
 $('form').addEventListener('submit', e => { e.preventDefault(); const t = $('text').value; $('text').value = ''; stopSpeaking(); send(t); });
 $('btnReset').addEventListener('click', async e => {
   e.currentTarget.blur();
-  stopSpeaking(); if (S.listening) cancelListening();
+  stopSpeaking(); if (S.listening) cancelListening(); setBriefing(false);
   try { await api('/api/reset', {}); $('log').textContent = ''; bubble('info', 'New conversation. Your notes are still here.'); idle(); }
   catch (err) { bubble('err', err.message); }
 });
@@ -317,7 +376,21 @@ $('btnSave').addEventListener('click', async e => {
   } catch (err) { bubble('err', err.message); }
 });
 $('speakOn').addEventListener('change', () => { store.set('focus.speak', $('speakOn').checked ? '1' : '0'); if (!$('speakOn').checked) stopSpeaking(); });
-$('voice').addEventListener('change', () => store.set('focus.voice', $('voice').value));
+$('voice').addEventListener('change', () => store.set(usingEdge() ? 'focus.voice.edge' : 'focus.voice', $('voice').value));
+function setBriefing(on) {
+  S.briefing = on;
+  const b = $('btnBrief');
+  b.classList.toggle('primary', on);
+  b.textContent = on ? 'Done' : 'Brief me';
+  $('text').placeholder = on
+    ? 'Briefing: type or talk. I just save, no coaching. Tap Done when finished.'
+    : 'Or type here. Start with “idea:” to save an idea instantly, free.';
+}
+$('btnBrief').addEventListener('click', e => {
+  e.currentTarget.blur();
+  if (S.briefing) { setBriefing(false); bubble('info', "Thanks — saved. Ask me anything now, or check the Notes panel."); }
+  else { setBriefing(true); bubble('info', "Briefing mode: tell me what's on your plate — clients, videos, whatever's open. I'll just save it, one thing at a time. Tap Done when you're finished."); }
+});
 $('startBtn').addEventListener('click', e => {
   e.currentTarget.blur();
   S.started = true;
@@ -330,7 +403,7 @@ $('startBtn').addEventListener('click', e => {
 $('speakOn').checked = store.get('focus.speak', '1') !== '0';
 if (!SR) $('browserNote').textContent = 'This browser has no speech recognition, so you will type (or use your dictation tool). Chrome or Safari can listen.';
 else $('browserNote').textContent = 'Your browser will ask to use the microphone the first time. Chrome sends speech to Google, Safari to Apple.';
-if (synth) { fillVoices(); synth.addEventListener && synth.addEventListener('voiceschanged', fillVoices); }
+if (synth && synth.addEventListener) synth.addEventListener('voiceschanged', () => { if (!usingEdge()) setupVoices(); });
 api('/api/state').then(st => { applyState(st); $('startBtn').disabled = false; })
   .catch(err => { $('briefText').textContent = "Couldn't reach the Focus server: " + err.message; });
 })();
