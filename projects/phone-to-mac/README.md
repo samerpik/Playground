@@ -178,8 +178,10 @@ Why it stays safe with a model in the loop:
   `dispatch.sh`. Worst case, a confused (or prompt-injected) model picks a
   different *harmless* action; it can't read files or run commands.
 - `restart` / `shutdown` require an interactive confirmation.
-- v1 never feeds web pages or screen contents back to the model, so the only
-  thing steering it is the request you type. That keeps injection out of the loop.
+- Screen contents are never fed back to the model. Web pages are only read in the
+  spoken modes (talk / speak) when web search is on; typed `mac ...` and the phone
+  path never see web content. See [Talk mode](#talk-mode-a-spoken-conversation)
+  for what changes when it is on.
 
 Setup:
 
@@ -269,14 +271,26 @@ prints the reply and how long it took.
 Notes:
 
 - **No memory between sessions.** Each `jarvis` starts blank.
-- **It can't look things up live** (weather, news, prices). It opens a search for
-  you instead of guessing.
+- **Live questions get a spoken answer.** Ask about fixtures, weather or news and
+  it searches the web itself and tells you what it found, printing the search it
+  ran. Web search costs about $10 per 1,000 searches on top of normal usage
+  (figure from the API docs I had; check current pricing), capped at 3 per
+  question. It needs web search switched on for your Anthropic account (Console
+  settings); if it isn't, the first message says so and it carries on without.
+- **Web pages are untrusted input.** Once it has read the web, opening any link
+  needs your y/N first, and `--yes` doesn't skip that. Reason: a booby-trapped page
+  can try to steer a reply, and opening a URL is the one action that leads
+  somewhere you don't control. Everything else in the allow-list is unchanged.
+  Turn web search off entirely with `"web_search": false` in `config.json`.
 - **Silent Mac = silent assistant.** It warns you at start-up if the sound is
   muted or at zero.
 - **Better voice:** System Settings, Accessibility, Spoken Content, System Voice,
   Manage Voices (menu names vary by macOS version) has higher-quality voices.
   `say -v '?'` lists installed voices with their languages. Put the name in
   `config.json` as `"voice"`, and an optional speed as `"rate"` (words/minute).
+  Other talk-mode keys: `"web_search"` (true/false), `"web_search_max_uses"`
+  (default 3) and `"location"` (optional, e.g. `{"city": "Brighton", "country":
+  "GB", "timezone": "Europe/London"}` for local results).
 - **Limits of this version:** it starts speaking when the whole reply is ready
   (not word by word), you can't interrupt by talking over it, and speech input is
   whatever dictation tool you already use. Fully hands-free listening needs a
