@@ -1,6 +1,8 @@
 {
   "model": "claude-opus-5-5",
   "default_target": "mac",
+  "voice": null,
+  "rate": null,
   "targets": {
     "mac": { "type": "local", "dispatch": "~/.phone-remote/dispatch.sh" },
 

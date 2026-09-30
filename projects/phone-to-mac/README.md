@@ -194,11 +194,13 @@ python3 agent.py "set volume to 20 and open youtube lofi beats"
 python3 agent.py --yes "restart"                    # -y skips the confirm prompt
 ```
 
-**Cost / model:** it defaults to `claude-opus-5-5`. This is a simple
-"map a sentence to an action" job, so **`claude-sonnet-5-5` or `claude-haiku-4-5`
-would be markedly cheaper per command and probably just as accurate** — your
-call. Change the `"model"` field in `config.json`. (I'm not stating a per-command
-price; check current Anthropic pricing.)
+**Cost / model:** it defaults to `claude-opus-5-5`. `claude-sonnet-5-5` is the
+cheaper option that works with the current settings (about half the per-token
+price in the price table I had; check Anthropic's pricing page for today's
+numbers). Switch with the `"model"` field in `config.json`, or try one run with
+`--model claude-sonnet-5-5`. **Not Haiku:** `claude-haiku-4-5` rejects the
+adaptive-thinking and effort settings this agent sends, so it needs code changes
+first.
 
 **Wiring to voice later:** the phone Shortcut can `ssh` into the Mac and run
 `python3 .../agent.py "<dictated text>"`, so Siri dictation becomes the input.
@@ -238,6 +240,48 @@ mac --dry-run lock the screen
 
 The key file is owner-only (`chmod 600`) and never leaves your Mac; rotate it
 anytime in the Anthropic console.
+
+## Talk mode (a spoken conversation)
+
+`--talk` turns the agent into a back-and-forth conversation: it remembers what
+you said earlier in the session and **speaks every reply** (macOS `say`). Actions
+still work mid-conversation ("mute it", "open Spotify"), through the same
+allow-list.
+
+```bash
+# one-time: give it a short name (any name you like)
+echo "alias jarvis='mac --talk'" >> ~/.zshrc && source ~/.zshrc
+
+jarvis                                   # start talking
+jarvis --model claude-sonnet-5-5         # same, on a different model
+```
+
+Speak into your dictation tool (or type) and press Enter. It answers aloud and
+prints the reply and how long it took.
+
+| You do | What happens |
+|---|---|
+| say/type `goodbye` | ends the session |
+| say/type `reset` | forgets the conversation, starts fresh |
+| press Enter on a blank line | cuts off whatever it is saying |
+| Ctrl+C (at the prompt) | quits |
+
+Notes:
+
+- **No memory between sessions.** Each `jarvis` starts blank.
+- **It can't look things up live** (weather, news, prices). It opens a search for
+  you instead of guessing.
+- **Silent Mac = silent assistant.** It warns you at start-up if the sound is
+  muted or at zero.
+- **Better voice:** System Settings, Accessibility, Spoken Content, System Voice,
+  Manage Voices (menu names vary by macOS version) has higher-quality voices.
+  `say -v '?'` lists installed voices with their languages. Put the name in
+  `config.json` as `"voice"`, and an optional speed as `"rate"` (words/minute).
+- **Limits of this version:** it starts speaking when the whole reply is ready
+  (not word by word), you can't interrupt by talking over it, and speech input is
+  whatever dictation tool you already use. Fully hands-free listening needs a
+  local speech-to-text model plus microphone permission, and headphones so it
+  doesn't hear itself.
 
 ## Removing a device instantly
 

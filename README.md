@@ -27,4 +27,4 @@ never committed here; the notes are.
 | Project | Built with | Output |
 |---|---|---|
 | [Purple Luna teaser](projects/purple-luna-teaser/README.md) | Headless Chromium + ffmpeg, brand assets from `purple-luna-site` | 25.6s 1080×1920 vertical teaser |
-| [phone-to-mac](projects/phone-to-mac/README.md) | Native macOS SSH + a command-locked allow-list script, optional Claude API agent | Run a fixed set of safe actions on your Mac from your phone or a natural-language agent |
+| [phone-to-mac](projects/phone-to-mac/README.md) | Native macOS SSH + a command-locked allow-list script, optional Claude API agent (typed or spoken) | Run a fixed set of safe actions on your Mac from your phone or a natural-language agent |
