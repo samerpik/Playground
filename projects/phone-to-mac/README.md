@@ -207,6 +207,38 @@ Get the CLI behaving first.
 Status: `agent.py` is syntax-checked and its allow-list is verified to match
 `dispatch.sh`. It's **not yet run against the live API** (needs your key + Mac).
 
+### Make it a one-word command
+
+Typing the venv path every time is tedious, and a key set with `export` only
+lasts one terminal session. Fix both once — store the key in a private file and
+add a `mac` shell function:
+
+```bash
+mkdir -p ~/.phone-remote
+printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" > ~/.phone-remote/agent.env  # grabs the key from your current shell
+chmod 600 ~/.phone-remote/agent.env
+
+cat >> ~/.zshrc <<'EOF'
+
+# phone-to-mac — type: mac lock the screen
+mac() {
+  ( set -a; source ~/.phone-remote/agent.env; set +a
+    ~/Playground/projects/phone-to-mac/.venv/bin/python ~/Playground/projects/phone-to-mac/agent.py "$@" )
+}
+EOF
+source ~/.zshrc
+```
+
+Adjust the two paths if your clone lives elsewhere. Then just:
+
+```bash
+mac set the volume to 20
+mac --dry-run lock the screen
+```
+
+The key file is owner-only (`chmod 600`) and never leaves your Mac; rotate it
+anytime in the Anthropic console.
+
 ## Removing a device instantly
 
 ```bash
