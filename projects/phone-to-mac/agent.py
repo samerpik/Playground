@@ -123,9 +123,12 @@ Rules:
 - Set `target` only if the user names a computer; otherwise leave it "".
 - To open a website use openurl with the full https URL; for an app use app-open.
 - volume must be 0-100: 'half'->50, 'max'->100. To silence, use the mute action.
-- If the request can't be done with these actions, do NOT call the tool — reply in
-  one short sentence saying you can't.
-- Keep any text reply to one short line; it may be read aloud."""
+- If the user asks a QUESTION or is just chatting, do NOT use the tool — answer
+  directly and conversationally (usually 1-3 sentences; it may be read aloud).
+  You're a helpful voice assistant, not only a button panel.
+- If they want something you truly can't do yet (it needs their email, calendar,
+  files, or an action not in the list), say so briefly and what would enable it.
+- Keep replies tight and speakable."""
 
 
 # --- target resolution + dispatch ------------------------------------------
@@ -209,6 +212,7 @@ def run(config, request, auto_yes, dry_run, quiet=False):
     messages = [{"role": "user", "content": request}]
     printed = False
     last_res = None
+    spoken = []
 
     for _ in range(6):  # safety cap on tool rounds
         try:
@@ -229,19 +233,21 @@ def run(config, request, auto_yes, dry_run, quiet=False):
         if resp.stop_reason == "refusal":
             detail = getattr(resp, "stop_details", None)
             why = f" ({detail.category})" if detail and getattr(detail, "category", None) else ""
-            print(f"Claude declined this request{why}.")
-            return
+            msg = f"Sorry, I can't help with that{why}."
+            print(msg)
+            return msg
 
         for b in resp.content:
             if b.type == "text" and b.text.strip():
                 print(b.text.strip())
+                spoken.append(b.text.strip())
                 printed = True
 
         tool_uses = [b for b in resp.content if b.type == "tool_use"]
         if resp.stop_reason != "tool_use" or not tool_uses:
             if quiet and not printed and last_res:
                 print(last_res)
-            return
+            return " ".join(spoken)
 
         messages.append({"role": "assistant", "content": resp.content})
 
@@ -267,6 +273,7 @@ def run(config, request, auto_yes, dry_run, quiet=False):
         print(last_res)
     elif not quiet:
         print("(stopped: too many steps)")
+    return " ".join(spoken)
 
 
 def main():
@@ -275,10 +282,16 @@ def main():
     ap.add_argument("-y", "--yes", action="store_true", help="skip the confirm prompt for power actions")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show the actions, run nothing")
     ap.add_argument("-q", "--quiet", action="store_true", help="print only the final result (for voice/SSH)")
+    ap.add_argument("-s", "--speak", action="store_true", help="speak the reply aloud (macOS 'say')")
     args = ap.parse_args()
 
     config = load_config()
-    run(config, " ".join(args.request), args.yes, args.dry_run, args.quiet)
+    reply = run(config, " ".join(args.request), args.yes, args.dry_run, args.quiet)
+    if args.speak and reply and reply.strip():
+        try:
+            subprocess.run(["say", reply], timeout=60)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
