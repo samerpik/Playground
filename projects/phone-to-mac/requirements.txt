@@ -1,1 +1,5 @@
 anthropic>=1,<2
+
+# Optional: only needed if you set up the calendar connector (config.json → connectors.calendar).
+icalendar>=6,<7
+recurring-ical-events>=3,<4

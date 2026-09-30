@@ -6,6 +6,17 @@
   "web_search": false,
   "web_search_max_uses": 3,
   "location": null,
+
+  "_connectors_comment": "Read-only sources to ask about. Empty = none. To enable one, move it from _connectors_example into connectors and fill it in.",
+  "connectors": {},
+  "_connectors_example": {
+    "calendar": {
+      "_comment": "Google Calendar > Settings > your calendar > 'Secret address in iCal format'. Paste that URL as ics_url. Read-only; treat the URL like a password.",
+      "ics_url": "https://calendar.google.com/calendar/ical/YOUR_SECRET_ADDRESS/basic.ics",
+      "timezone": "Europe/London"
+    }
+  },
+
   "targets": {
     "mac": { "type": "local", "dispatch": "~/.phone-remote/dispatch.sh" },
 

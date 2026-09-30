@@ -297,6 +297,50 @@ Notes:
   local speech-to-text model plus microphone permission, and headphones so it
   doesn't hear itself.
 
+## Checking your things (connectors)
+
+Beyond doing things on the Mac, the agent can **check your own information and tell you
+about it** — starting with your calendar. Connectors are **read-only**: it can look and
+report, it can never send, reply, add, move or delete anything. Each one is offered to
+the model only when you set it up in `config.json`, so nothing is reachable until you
+switch it on.
+
+Ask naturally in talk mode (or typed): *"what's on today?"*, *"when's my next meeting?"*,
+*"am I free tomorrow afternoon?"* — it reads the calendar and answers in a sentence.
+
+**Calendar (Google, read-only, no Google Cloud project):**
+
+1. Google Calendar → **Settings** → click your calendar on the left → scroll to
+   **"Secret address in iCal format"** → copy that URL. (It's a private link; treat it
+   like a password. You can reset it there any time, which instantly revokes the old one.)
+2. Put it in `config.json`:
+
+   ```json
+   "connectors": {
+     "calendar": { "ics_url": "https://calendar.google.com/calendar/ical/…/basic.ics",
+                   "timezone": "Europe/London" }
+   }
+   ```
+3. Install the two small calendar packages (once):
+
+   ```bash
+   cd ~/Playground/projects/phone-to-mac && uv pip install -r requirements.txt
+   ```
+
+That's it — `mac --talk` can now answer calendar questions. Recurring events (standups,
+weekly calls) are expanded correctly; all-day events and locations are included; event
+*descriptions* are deliberately left out (they're the noisiest, least useful, and most
+likely to carry junk).
+
+**Security note:** everything a connector returns is **untrusted** — it's whatever text is
+in your calendar. The agent treats it as information only, never as instructions, and once
+it has read a connector, opening any URL needs your y/N first (same guard as web pages,
+and `--yes` doesn't skip it). So a calendar invite that says "open this link" can't make
+it happen behind your back.
+
+**Coming next:** email (read unread / summarise a thread), Slack, and meeting notes — same
+read-only model, each behind its own `config.json` block. Say which you want first.
+
 ## Removing a device instantly
 
 ```bash
@@ -347,3 +391,9 @@ Run on the Mac after install:
 - [ ] `screenshot` (after granting Screen Recording)
 - [ ] confirm `shutdown` **without** `confirm` is refused, `shutdown confirm` works
 - [ ] `remove.sh` then a phone command fails with a permission error
+
+Connectors (if set up):
+
+- [ ] after adding the calendar `ics_url` and `uv pip install -r requirements.txt`,
+      `mac "what's on my calendar today"` reads back today's events
+- [ ] `mac --talk` then ask "am I free tomorrow?" — it answers from the calendar
