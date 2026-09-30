@@ -3,7 +3,7 @@
   "default_target": "mac",
   "voice": null,
   "rate": null,
-  "web_search": true,
+  "web_search": false,
   "web_search_max_uses": 3,
   "location": null,
   "targets": {

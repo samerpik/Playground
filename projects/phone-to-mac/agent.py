@@ -66,8 +66,9 @@ DEFAULT_CONFIG = {
     # speaking rate in words per minute. None = the system default.
     "voice": None,
     "rate": None,
-    # Live web lookups in the spoken modes (talk / speak). Roughly a cent a search.
-    "web_search": True,
+    # Live web lookups in the spoken modes (talk / speak). Off by default: it makes
+    # replies slower and costs roughly a cent a search on top of normal usage.
+    "web_search": False,
     "web_search_max_uses": 3,
     "location": None,  # e.g. {"city": "Brighton", "country": "GB", "timezone": "Europe/London"}
 }
@@ -127,7 +128,7 @@ COMPUTER_TOOL = {
 
 def web_enabled(config, voice):
     """Live web search is only offered in the spoken modes; config.json can turn it off."""
-    return bool(voice and config.get("web_search", True))
+    return bool(voice and config.get("web_search", False))
 
 
 def tools_for(config, state):
@@ -200,6 +201,15 @@ def build_system(voice):
     parts.append("Right now it is " + time.strftime("%A %d %B %Y, %H:%M")
                  + " (the user's local time).")
     return "\n\n".join(parts)
+
+
+def api_error_text(e):
+    """The API's own sentence ("Your credit balance is too low...") instead of the raw error dump."""
+    body = getattr(e, "body", None)
+    inner = body.get("error") if isinstance(body, dict) else None
+    if isinstance(inner, dict) and inner.get("message"):
+        return str(inner["message"])
+    return str(getattr(e, "message", e))
 
 
 # --- target resolution + dispatch ------------------------------------------
@@ -428,7 +438,7 @@ def turn(client, config, system, messages, text, auto_yes, dry_run, quiet=False,
                 if state.get("web") and len(messages) == 1:
                     state["web"] = False
                     print(f"(Web search isn't available, so I'll carry on without it: "
-                          f"{getattr(e, 'message', e)})")
+                          f"{api_error_text(e)})")
                     continue
                 raise
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
@@ -516,7 +526,7 @@ def run(config, request, auto_yes, dry_run, quiet=False, voice=False):
     except anthropic.AuthenticationError:
         sys.exit("Auth failed. Set a valid ANTHROPIC_API_KEY (or run `ant auth login`).")
     except anthropic.APIError as e:
-        sys.exit(f"Claude API error: {e}")
+        sys.exit(f"Claude API error: {api_error_text(e)}")
     return reply
 
 
@@ -573,7 +583,7 @@ def talk(config, first, auto_yes, dry_run):
                 print("Auth failed. Set a valid ANTHROPIC_API_KEY (or run `ant auth login`).")
                 break
             except anthropic.APIError as e:
-                print(f"(Claude API error: {e})")
+                print(f"(Claude API error: {api_error_text(e)})")
                 speaker.say("Sorry, I hit an error talking to Claude.")
                 continue
 

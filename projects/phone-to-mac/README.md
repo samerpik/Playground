@@ -271,17 +271,16 @@ prints the reply and how long it took.
 Notes:
 
 - **No memory between sessions.** Each `jarvis` starts blank.
-- **Live questions get a spoken answer.** Ask about fixtures, weather or news and
-  it searches the web itself and tells you what it found, printing the search it
-  ran. Web search costs about $10 per 1,000 searches on top of normal usage
-  (figure from the API docs I had; check current pricing), capped at 3 per
-  question. It needs web search switched on for your Anthropic account (Console
-  settings); if it isn't, the first message says so and it carries on without.
-- **Web pages are untrusted input.** Once it has read the web, opening any link
+- **Live web answers are OFF by default** (they made replies slow and cost extra).
+  Turn them on with `"web_search": true` in `config.json`. Then live questions
+  (fixtures, weather, news) get a spoken answer and it prints the search it ran.
+  Web search costs about $10 per 1,000 searches on top of normal usage (figure
+  from the API docs I had; check current pricing), capped at 3 per question, and
+  needs web search switched on for your Anthropic account (Console settings).
+- **Web pages are untrusted input** (when web search is on). Once it has read the web, opening any link
   needs your y/N first, and `--yes` doesn't skip that. Reason: a booby-trapped page
   can try to steer a reply, and opening a URL is the one action that leads
   somewhere you don't control. Everything else in the allow-list is unchanged.
-  Turn web search off entirely with `"web_search": false` in `config.json`.
 - **Silent Mac = silent assistant.** It warns you at start-up if the sound is
   muted or at zero.
 - **Better voice:** System Settings, Accessibility, Spoken Content, System Voice,

@@ -28,3 +28,4 @@ never committed here; the notes are.
 |---|---|---|
 | [Purple Luna teaser](projects/purple-luna-teaser/README.md) | Headless Chromium + ffmpeg, brand assets from `purple-luna-site` | 25.6s 1080×1920 vertical teaser |
 | [phone-to-mac](projects/phone-to-mac/README.md) | Native macOS SSH + a command-locked allow-list script, optional Claude API agent (typed or spoken) | Run a fixed set of safe actions on your Mac from your phone or a natural-language agent |
+| [Focus coach](projects/focus-coach/README.md) | A local page with push-to-talk, a small cheap model and a notes file | Talk your week through with something that remembers it, and never lose an idea |

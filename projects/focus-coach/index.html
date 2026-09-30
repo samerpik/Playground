@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="focus-token" content="__TOKEN__">
+<title>Focus</title>
+<style nonce="__NONCE__">
+:root{
+  --bg:#f5f3ee; --panel:#ffffff; --ink:#1d1b18; --muted:#6c675e; --line:#e2ded5;
+  --accent:#6b3fd4; --accent-ink:#ffffff; --you:#ebe5fb; --err:#b93a2b; --ok:#1d7a52;
+  --shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#131216; --panel:#1c1b21; --ink:#f0eee8; --muted:#9a968d; --line:#2c2a33;
+  --accent:#a48bff; --accent-ink:#16131f; --you:#2b2545; --err:#ff7b6b; --ok:#5fd0a0;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35);}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+#app{display:flex;flex-direction:column;height:100%;max-width:760px;margin:0 auto;padding:0 16px}
+header{display:flex;align-items:center;gap:10px;padding:14px 0}
+h1{font-size:18px;margin:0;letter-spacing:.2px}
+.spacer{flex:1}
+#cost{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+main{flex:1;overflow-y:auto;padding:8px 0 16px}
+.msg{max-width:88%;margin:10px 0;padding:10px 14px;border-radius:14px;border:1px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.you{margin-left:auto;background:var(--you);border-color:transparent}
+.msg.err{border-color:var(--err);color:var(--err)}
+.msg.info{background:transparent;border-style:dashed;color:var(--muted);font-size:14px}
+.chip{display:block;width:fit-content;margin-top:8px;font-size:13px;color:var(--ok);border:1px solid var(--ok);border-radius:999px;padding:1px 10px}
+#live{min-height:24px;color:var(--muted);font-style:italic;padding:0 4px}
+footer{padding:8px 0 18px}
+.pill{display:flex;align-items:center;justify-content:center;gap:10px;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--panel);font-weight:600;box-shadow:var(--shadow);margin-bottom:10px}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--muted)}
+.pill.listening{border-color:var(--accent)}
+.pill.listening .dot{background:#e5484d;animation:pulse 1s infinite}
+.pill.thinking .dot{background:var(--accent);animation:pulse 1.4s infinite}
+.pill.speaking .dot{background:var(--ok);animation:pulse 1.2s infinite}
+.pill.error{border-color:var(--err);color:var(--err)}
+@keyframes pulse{50%{transform:scale(1.5);opacity:.5}}
+form{display:flex;gap:8px}
+input[type=text]{flex:1;font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.hint{margin-top:8px;font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+select{font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:3px 6px;max-width:200px}
+aside{position:fixed;inset:0 0 0 auto;width:min(520px,100%);background:var(--panel);border-left:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;padding:16px;gap:10px;z-index:5}
+aside[hidden],#start[hidden]{display:none}
+aside header{padding:0}
+#notesView,#notesEdit{flex:1;overflow:auto;margin:0;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--bg);color:var(--ink)}
+#notesEdit{resize:none;width:100%}
+#start{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px;z-index:9}
+.card{max-width:520px}
+.card h2{margin:0 0 8px;font-size:28px}
+.card p{margin:10px 0;color:var(--muted)}
+.card p.brief{color:var(--ink);font-size:18px}
+.warn{color:var(--err);font-size:13px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Focus</h1>
+    <span id="cost" title="Estimated spend today. Your Anthropic console has the exact figure."></span>
+    <span class="spacer"></span>
+    <button id="btnNotes" type="button">Notes</button>
+    <button id="btnReset" type="button">New chat</button>
+  </header>
+  <main id="log" role="log" aria-live="polite"></main>
+  <div id="live" aria-hidden="true"></div>
+  <footer>
+    <div id="pill" class="pill"><span class="dot"></span><span id="pillText"></span></div>
+    <form id="form" autocomplete="off">
+      <input id="text" type="text" placeholder="Or type here. Start with “idea:” to save an idea instantly, free." aria-label="Message">
+      <button class="primary" type="submit">Send</button>
+    </form>
+    <div class="hint">
+      <span>Hold <b>Space</b> to talk, or tap it to start and again to stop. <b>Esc</b> stops me talking.</span>
+      <label><input id="speakOn" type="checkbox" checked> speak replies</label>
+      <select id="voice" aria-label="Voice"></select>
+    </div>
+  </footer>
+</div>
+
+<aside id="notesPanel" hidden>
+  <header>
+    <h1>Notes</h1>
+    <span class="spacer"></span>
+    <button id="btnEdit" type="button">Edit</button>
+    <button id="btnSave" type="button" class="primary" hidden>Save</button>
+    <button id="btnCloseNotes" type="button">Close</button>
+  </header>
+  <div id="notesWarn" class="warn" hidden></div>
+  <pre id="notesView"></pre>
+  <textarea id="notesEdit" hidden spellcheck="false" aria-label="Edit notes"></textarea>
+</aside>
+
+<div id="start">
+  <div class="card">
+    <h2>Focus</h2>
+    <p class="brief" id="briefText">Loading your notes…</p>
+    <p>Talk it through with me: I know what you're juggling, I'll push back on new ideas, and I'll save the ones worth keeping.</p>
+    <button id="startBtn" type="button" class="primary" disabled>Start</button>
+    <p id="browserNote"></p>
+  </div>
+</div>
+
+<script type="application/json" id="conf">__CONF__</script>
+<script nonce="__NONCE__">
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const TOKEN = document.querySelector('meta[name="focus-token"]').content;
+const CONF = JSON.parse($('conf').textContent || '{}');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const synth = window.speechSynthesis;
+const S = { started:false, listening:false, cancelled:false, busy:false, speaking:false,
+            heldAt:0, finalText:'', interim:'', lastError:'', brief:'', rec:null, editing:false };
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (_) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
+};
+
+// ---- small helpers --------------------------------------------------------
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'X-Focus-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) throw new Error(data.error || ('The server answered ' + res.status));
+  return data;
+}
+function pill(kind, text) { $('pill').className = 'pill ' + kind; $('pillText').textContent = text; }
+function idle() {
+  pill('idle', SR ? 'Press Space to talk' : 'Type below (this browser has no speech recognition)');
+}
+function bubble(kind, text, saved) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + kind;
+  d.textContent = text;
+  (saved || []).forEach(s => {
+    const c = document.createElement('div');
+    c.className = 'chip';
+    c.textContent = 'Saved to ' + s.section + ': ' + s.note;
+    d.appendChild(c);
+  });
+  const log = $('log');
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+function money(u) { if (u >= 1) return '$' + u.toFixed(2); const c = u * 100; return (c < 10 ? c.toFixed(2) : c.toFixed(1)) + '¢'; }
+function applyState(st) {
+  if (!st) return;
+  S.brief = st.brief;
+  $('briefText').textContent = st.brief;
+  $('cost').textContent = 'Today ≈ ' + money(st.cost.usd) + ' · ' + st.cost.turns + (st.cost.turns === 1 ? ' call' : ' calls') + ' · ' + st.model;
+  $('notesView').textContent = st.notes;
+  if (!S.editing) $('notesEdit').value = st.notes;
+  const warn = $('notesWarn');
+  warn.hidden = !st.notes_truncated;
+  warn.textContent = st.notes_truncated ? 'Your notes are long, so only the most recent part is sent each time. Trim old items to bring the rest back.' : '';
+}
+
+// ---- speaking ---------------------------------------------------------------
+function fillVoices() {
+  if (!synth) return;
+  const lang = (CONF.lang || navigator.language || 'en').slice(0, 2).toLowerCase();
+  const score = v => (v.lang && v.lang.toLowerCase().startsWith(lang) ? 10 : 0) + (/premium|enhanced/i.test(v.name) ? 5 : 0) + (v.default ? 1 : 0);
+  const list = [...synth.getVoices()].sort((a, b) => score(b) - score(a));
+  const sel = $('voice');
+  sel.textContent = '';
+  list.forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name + ' (' + v.lang + ')'; sel.appendChild(o); });
+  const saved = store.get('focus.voice', '');
+  if (saved && list.some(v => v.name === saved)) sel.value = saved;
+}
+function chosenVoice() { return synth ? (synth.getVoices().find(v => v.name === $('voice').value) || null) : null; }
+function speak(text) {
+  if (!synth || !$('speakOn').checked || !text) return;
+  synth.cancel();
+  const chunks = (text.match(/[^.!?\n]+[.!?]*\s*/g) || [text]).map(s => s.trim()).filter(Boolean);
+  S.speaking = true;
+  pill('speaking', 'Speaking… (Space to interrupt)');
+  chunks.forEach((c, i) => {
+    const u = new SpeechSynthesisUtterance(c);
+    const v = chosenVoice();
+    if (v) u.voice = v;
+    u.rate = 1.05;
+    if (i === chunks.length - 1) {
+      u.onend = u.onerror = () => { S.speaking = false; if (!S.listening && !S.busy) idle(); };
+    }
+    synth.speak(u);
+  });
+}
+function stopSpeaking() { if (synth) synth.cancel(); S.speaking = false; }
+
+// ---- listening ----------------------------------------------------------------
+const ERRORS = {
+  'not-allowed': 'The microphone is blocked. Allow it for this page (address bar), and check System Settings → Privacy & Security → Microphone.',
+  'service-not-allowed': 'Speech recognition is switched off. In Safari it needs Dictation turned on in System Settings → Keyboard; Chrome works without.',
+  'network': "Speech recognition couldn't reach its service. Check your connection, or type instead.",
+  'audio-capture': "I can't find a microphone.",
+  'no-speech': "I didn't catch anything. Try again.",
+};
+function startListening() {
+  if (!SR) { bubble('info', 'This browser has no speech recognition. Use Chrome or Safari, or type (or use your dictation tool) in the box below.'); return; }
+  if (S.busy || S.listening) return;
+  stopSpeaking();
+  S.finalText = ''; S.interim = ''; S.lastError = ''; S.cancelled = false;
+  const rec = new SR();
+  rec.lang = CONF.lang || navigator.language || 'en-GB';
+  rec.interimResults = true;
+  rec.continuous = true;
+  rec.maxAlternatives = 1;
+  rec.onresult = ev => {
+    if (S.rec !== rec) return;                            // a late event from a finished recognizer
+    let interim = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const r = ev.results[i];
+      if (r.isFinal) S.finalText += r[0].transcript + ' '; else interim += r[0].transcript;
+    }
+    S.interim = interim;
+    $('live').textContent = (S.finalText + interim).trim();
+  };
+  rec.onerror = ev => { if (S.rec === rec) S.lastError = ev.error || ''; };
+  rec.onend = () => {
+    if (S.rec !== rec) return;
+    S.listening = false; S.rec = null;
+    $('live').textContent = '';
+    const said = (S.finalText + S.interim).trim();
+    if (S.cancelled) { idle(); return; }
+    if (said) { send(said); return; }
+    if (S.lastError && S.lastError !== 'aborted') { pill('error', 'Speech problem'); bubble('err', ERRORS[S.lastError] || ('Speech recognition error: ' + S.lastError)); }
+    else idle();
+  };
+  S.rec = rec; S.listening = true;
+  pill('listening', 'Listening… (tap Space when you’re done)');
+  try { rec.start(); } catch (e) { S.listening = false; S.rec = null; idle(); }
+}
+function stopListening() { if (S.rec) { try { S.rec.stop(); } catch (_) {} } }
+function cancelListening() { S.cancelled = true; if (S.rec) { try { S.rec.abort(); } catch (_) {} } }
+
+// ---- sending ------------------------------------------------------------------
+async function send(text) {
+  text = (text || '').trim();
+  if (!text || S.busy) return;
+  S.busy = true;
+  bubble('you', text);
+  pill('thinking', 'Thinking…');
+  $('text').disabled = true;
+  try {
+    const r = await api('/api/chat', { text });
+    if (r.reply) bubble('ai', r.reply, r.saved);
+    applyState(r.state);
+    if (r.reply) speak(r.reply);
+  } catch (err) {
+    bubble('err', err.message);
+    pill('error', 'Something went wrong');
+  } finally {
+    S.busy = false;
+    $('text').disabled = false;
+    if (!S.speaking && !S.listening && $('pill').className.indexOf('error') < 0) idle();
+  }
+}
+
+// ---- keys ---------------------------------------------------------------------
+const typing = el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    stopSpeaking();
+    if (S.listening) cancelListening();
+    if (!$('notesPanel').hidden && !S.editing) $('notesPanel').hidden = true;
+    if (!S.busy && !S.listening) idle();
+    return;
+  }
+  if (e.code !== 'Space' || typing(e.target) || e.repeat || !S.started) return;
+  e.preventDefault();
+  if (S.listening) stopListening();                      // a second tap ends it
+  else { S.heldAt = Date.now(); startListening(); }
+});
+addEventListener('keyup', e => {
+  if (e.code !== 'Space' || typing(e.target) || !S.started) return;
+  e.preventDefault();
+  if (S.listening && S.heldAt && Date.now() - S.heldAt > 450) stopListening();   // it was a hold: letting go ends it
+  S.heldAt = 0;
+});
+
+// ---- buttons ------------------------------------------------------------------
+$('form').addEventListener('submit', e => { e.preventDefault(); const t = $('text').value; $('text').value = ''; stopSpeaking(); send(t); });
+$('btnReset').addEventListener('click', async e => {
+  e.currentTarget.blur();
+  stopSpeaking(); if (S.listening) cancelListening();
+  try { await api('/api/reset', {}); $('log').textContent = ''; bubble('info', 'New conversation. Your notes are still here.'); idle(); }
+  catch (err) { bubble('err', err.message); }
+});
+$('btnNotes').addEventListener('click', e => { e.currentTarget.blur(); $('notesPanel').hidden = !$('notesPanel').hidden; });
+$('btnCloseNotes').addEventListener('click', e => { e.currentTarget.blur(); $('notesPanel').hidden = true; });
+$('btnEdit').addEventListener('click', e => {
+  e.currentTarget.blur();
+  S.editing = true;
+  $('notesView').hidden = true; $('notesEdit').hidden = false; $('btnEdit').hidden = true; $('btnSave').hidden = false;
+  $('notesEdit').focus();
+});
+$('btnSave').addEventListener('click', async e => {
+  e.currentTarget.blur();
+  try {
+    const r = await api('/api/notes', { notes: $('notesEdit').value });
+    S.editing = false;
+    $('notesView').hidden = false; $('notesEdit').hidden = true; $('btnEdit').hidden = false; $('btnSave').hidden = true;
+    applyState(r.state);
+  } catch (err) { bubble('err', err.message); }
+});
+$('speakOn').addEventListener('change', () => { store.set('focus.speak', $('speakOn').checked ? '1' : '0'); if (!$('speakOn').checked) stopSpeaking(); });
+$('voice').addEventListener('change', () => store.set('focus.voice', $('voice').value));
+$('startBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  S.started = true;
+  $('start').hidden = true;
+  idle();
+  speak(S.brief);
+});
+
+// ---- start up -------------------------------------------------------------------
+$('speakOn').checked = store.get('focus.speak', '1') !== '0';
+if (!SR) $('browserNote').textContent = 'This browser has no speech recognition, so you will type (or use your dictation tool). Chrome or Safari can listen.';
+else $('browserNote').textContent = 'Your browser will ask to use the microphone the first time. Chrome sends speech to Google, Safari to Apple.';
+if (synth) { fillVoices(); synth.addEventListener && synth.addEventListener('voiceschanged', fillVoices); }
+api('/api/state').then(st => { applyState(st); $('startBtn').disabled = false; })
+  .catch(err => { $('briefText').textContent = "Couldn't reach the Focus server: " + err.message; });
+})();
+</script>
+</body>
+</html>
