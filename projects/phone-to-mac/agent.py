@@ -92,6 +92,24 @@ def load_config():
     return DEFAULT_CONFIG
 
 
+def ensure_api_key():
+    """Find the Anthropic key: the environment first, else the file the phone setup saved
+    (~/.phone-remote/agent.env), so `mac ...` works in any terminal, not only the one that
+    exported the key. Returns True once a key is in the environment."""
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return True
+    try:
+        with open(os.path.expanduser("~/.phone-remote/agent.env"), encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"\s*(?:export\s+)?ANTHROPIC_API_KEY\s*=\s*(.+?)\s*$", line)
+                if m:
+                    os.environ["ANTHROPIC_API_KEY"] = m.group(1).strip("'\"")
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 # --- the allow-list (must stay in sync with dispatch.sh) --------------------
 ALLOWED = [
     "ping", "openurl", "search", "youtube", "app-open", "app-close",
@@ -646,6 +664,15 @@ def main():
     config = dict(load_config())
     if args.model:
         config["model"] = args.model
+
+    if not ensure_api_key():
+        sys.exit(
+            "No Anthropic API key found.\n"
+            "  This shell doesn't have ANTHROPIC_API_KEY set, and none is saved in\n"
+            "  ~/.phone-remote/agent.env. Fix it with one of these:\n"
+            "    export ANTHROPIC_API_KEY=sk-ant-...            (this terminal only)\n"
+            "    printf 'ANTHROPIC_API_KEY=sk-ant-...\\n' >> ~/.phone-remote/agent.env   (every terminal, and the phone)"
+        )
 
     if args.talk:
         talk(config, " ".join(args.request) or None, args.yes, args.dry_run)
