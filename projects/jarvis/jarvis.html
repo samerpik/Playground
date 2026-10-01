@@ -58,7 +58,8 @@ h1{font-family:var(--display);font-weight:600;font-size:38px;line-height:1;margi
 /* banners and notes */
 .banner{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:16px;
   padding:12px 14px;border-radius:12px;border:1px solid var(--wait);background:var(--wait-soft);color:var(--fg)}
-.banner span{flex:1;min-width:0}
+.banner .btext{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.banner small{color:var(--muted);font-family:var(--mono);font-size:11.5px;overflow-wrap:anywhere}
 .secnote{color:var(--wait);font-size:13px;margin:8px 0 0}
 .secnote.quiet{color:var(--muted)}
 
@@ -115,12 +116,13 @@ h2 .n{font-family:var(--mono);font-size:12px;color:var(--faint);font-weight:500}
 .band{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 .band > div{min-width:0}
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:6px 18px;box-shadow:var(--shadow)}
-.line{display:flex;gap:12px;align-items:baseline;padding:10px 0;border-top:1px solid var(--border)}
+/* rows: marker | name + detail, with the time on its own line under the name, at every width */
+.line{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:12px;row-gap:3px;align-items:baseline;padding:10px 0;border-top:1px solid var(--border)}
 .line:first-child{border-top:0}
 .line .lt{flex:1;min-width:0}
 .line .lt b{font-weight:600;overflow-wrap:anywhere}
 .line .sub{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
-.line .when{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+.line .when{grid-column:2;font-family:var(--mono);font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
 .pill{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;padding:2px 7px;
   border-radius:6px;white-space:nowrap;flex:none}
 .pill.working{background:var(--accent-soft);color:var(--accent)}
@@ -144,8 +146,6 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--border);color
   .counts{justify-content:flex-start}
   .band{grid-template-columns:1fr}
   .vrow .spacer{flex-basis:100%;height:0}
-  .line{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;row-gap:2px;align-items:baseline}
-  .line .when{grid-column:2;white-space:normal}
   .ask input, select{font-size:16px}
 }
 </style>
@@ -167,7 +167,7 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--border);color
   </header>
 
   <div class="banner" id="banner" role="status" hidden>
-    <span id="bannerText"></span>
+    <div class="btext"><span id="bannerText"></span><small id="bannerDetail"></small></div>
     <button type="button" class="btn small" id="allow" hidden>Allow</button>
   </div>
 
@@ -411,10 +411,14 @@ const deadWatch = e => !!e && (e.code === "bad_request" || e.code === "not_grant
 function renderFresh() {
   const dot = $("liveDot");
   if (S.sessions && S.sAt) { $("fresh").textContent = "Live · updated " + ago(S.sAt); dot.className = "dot " + (S.sErr ? "stale" : "on"); }
+  else if (S.triggers && S.tAt) { $("fresh").textContent = "Routines live · sessions unavailable"; dot.className = "dot stale"; }
   else if (S.sErr) { $("fresh").textContent = "Not connected"; dot.className = "dot off"; }
   else { $("fresh").textContent = "Connecting…"; dot.className = "dot"; }
   $("refresh").hidden = !S.mcp || (!S.sessions && !S.triggers && deadWatch(S.sErr) && deadWatch(S.tErr));
 }
+const toolOf = what => (what === "routines" ? "list_triggers" : "list_sessions");
+// The platform's own words and code, small, so a screenshot says exactly what was refused.
+const detailOf = e => (!e ? "" : (e.message ? cap(clean(e.message), 200) + " · " : "") + "code: " + e.code);
 function fixCopy(err, what) {
   const code = err && err.code;
   switch (code) {
@@ -426,7 +430,11 @@ function fixCopy(err, what) {
         : S.permState === "prompt"
         ? "Jarvis needs your OK to read your " + what + ". Tap Allow."
         : "Jarvis isn't allowed to read your " + what + " in this view. Turn Claude Code Remote back on from this page's Permissions menu.";
-    case "blocked_by_policy": case "approval_required": return "Your organization's settings don't let this page read your " + what + ".";
+    case "approval_required":
+      return "Reading your " + what + " is set to need approval every time, and pages can't ask for approval yet. "
+        + "In claude.ai → Settings → Connectors → Claude Code Remote, let " + toolOf(what) + " run without approval (it only reads). "
+        + "If that setting is locked, your organization controls it.";
+    case "blocked_by_policy": return "Your organization's settings block this page from reading your " + what + " (" + toolOf(what) + ").";
     case "not_granted": case "capability_disabled": case "capability_removed": return "Live data isn't available in this view. Open the page in claude.ai, signed in.";
     case "server_unavailable": return "Couldn't refresh your " + what + " just now. Showing the last update; it will try again shortly.";
     case "shape": return "Your " + what + " came back in a format Jarvis doesn't recognise.";
@@ -439,6 +447,7 @@ function renderProblems() {
   if (hard(se)) {
     banner.hidden = false;
     $("bannerText").textContent = fixCopy(se, "sessions");
+    $("bannerDetail").textContent = detailOf(se);
     allow.hidden = !(S.perms && (se.code === "not_in_manifest" || se.code === "consent_required") && S.permState === "prompt");
   } else { banner.hidden = true; allow.hidden = true; }
   const soft = se && !hard(se);
@@ -446,7 +455,7 @@ function renderProblems() {
   if (soft) $("noteSessions").textContent = fixCopy(se, "sessions");
   const showT = !!te && !(hard(se) && te.code === se.code);
   $("noteRoutines").hidden = !showT;
-  if (showT) $("noteRoutines").textContent = fixCopy(te, "routines");
+  if (showT) $("noteRoutines").textContent = fixCopy(te, "routines") + (hard(te) ? " (" + detailOf(te) + ")" : "");
 }
 function renderAll() {
   const c = S.sessions ? classify(S.sessions) : null;
@@ -589,10 +598,7 @@ const ORD = ["First", "Second", "Third", "Fourth", "Fifth"];
 const plain = t => noEmoji(t) || t; // for the snapshot: keep emoji-only names rather than blank them
 const sayable = t => noEmoji(String(t)).replace(/\s*\+\s*/g, " and ").replace(/&/g, " and ")
   .replace(/\s*[;|]\s*/g, ", ").replace(/[.!?…]+$/, "").replace(/\s+/g, " ").trim();
-function briefText() {
-  const h = new Date().getHours();
-  const parts = [h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening."];
-  if (!S.sessions) { parts.push("I can't see your sessions right now, so I don't know what's waiting."); return parts.join(" "); }
+function sessionBrief(parts) {
   const c = classify(S.sessions), n = c.waiting.length;
   if (!n) parts.push(S.sMore ? "Nothing is waiting on you in your newest 100 sessions." : "Nothing is waiting on you right now.");
   else {
@@ -602,6 +608,12 @@ function briefText() {
   }
   if (c.done.length) parts.push("Recently finished: " + c.done.slice(0, 3).map(d => sayable(d.title) || "an untitled session").join(", ") + ".");
   if (c.working.length) parts.push(c.working.length === 1 ? "One session is still working." : c.working.length + " sessions are still working.");
+}
+function briefText() {
+  const h = new Date().getHours();
+  const parts = [h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening."];
+  if (S.sessions) sessionBrief(parts);
+  else parts.push("I can't see your sessions right now, so I don't know what's waiting.");
   const now = Date.now(), nx = S.triggers ? routinesOf(S.triggers).find(r => !r.manual && r.next > now) : null;
   if (nx) parts.push("Next routine: " + (sayable(nx.name) || "an unnamed routine") + ", " +
     new Date(nx.next).toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" }) + ".");

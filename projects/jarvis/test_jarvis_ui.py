@@ -68,6 +68,7 @@ STUB = r"""
       window.__calls.push({server, tool, input, opts});
       const fire = () => {
         if (mode() === "deny") handler({type: "error", error: {code: "not_in_manifest", message: "declined"}});
+        else if (mode() === "policy" && tool === "list_sessions") handler({type: "error", error: {code: "approval_required", message: "This tool requires approval before each use"}});
         else if (mode() === "flaky" && tool === "list_triggers") handler({type: "error", error: {code: "server_unavailable", retryable: true, message: "5xx"}});
         else handler({type: "data", result: {content: [{type: "text", text: "{}"}], payload: tool === "list_sessions" ? sessPayload() : trigPayload()}});
       };
@@ -362,6 +363,21 @@ with sync_playwright() as pw:
     page.wait_for_function("() => window.__permReq === 1")
     page.wait_for_timeout(100)
     check("right after Allow, the banner says it's loading (not 'isn't allowed')", page.inner_text("#bannerText") == "Allowed. Loading your sessions…", page.inner_text("#bannerText"))
+    ctx.close()
+
+    print("sessions refused, routines allowed (the real-viewer case)")
+    ctx, page, logs = open_page(browser, mode="policy", width=760)
+    page.wait_for_function("() => !document.getElementById('banner').hidden && document.querySelectorAll('#routines .line').length === 3")
+    bt, bd = page.inner_text("#bannerText"), page.inner_text("#bannerDetail")
+    check("the banner says it's an approval setting, names the tool, and shows the platform's code",
+          "need approval every time" in bt and "list_sessions" in bt and "code: approval_required" in bd and "requires approval" in bd, (bt, bd))
+    check("routines still load, and the status says it's a partial connection", page.inner_text("#fresh") == "Routines live · sessions unavailable", page.inner_text("#fresh"))
+    w = ev(page, "document.querySelector('#routines .lt').getBoundingClientRect().width")
+    check("in a mid-width panel (760px) routine names get room (no more 'Inbo / x')", w > 200, w)
+    page.click("#brief")
+    page.wait_for_function("() => window.__spoken.length > 0 && document.getElementById('stop').hidden")
+    sp = " ".join(ev(page, "window.__spoken"))
+    check("without sessions, the brief still gives the next routine", "can't see your sessions" in sp and "Next routine: Broken routine" in sp, sp)
     ctx.close()
 
     ctx, page, logs = open_page(browser, mode="nomcp")
