@@ -28,5 +28,5 @@ never committed here; the notes are.
 |---|---|---|
 | [Purple Luna teaser](projects/purple-luna-teaser/README.md) | Headless Chromium + ffmpeg, brand assets from `purple-luna-site` | 25.6s 1080×1920 vertical teaser |
 | [phone-to-mac](projects/phone-to-mac/README.md) | Native macOS SSH + a command-locked allow-list script, optional Claude API agent (typed or spoken) | Run a fixed set of safe actions on your Mac, and ask it to check read-only sources (calendar, more coming), from your phone or a natural-language agent |
-| [Jarvis](projects/jarvis/README.md) | A claude.ai page with read-only Claude Code Remote access, browser speech and the `sample` capability | Live view of what's waiting on you across your Claude sessions, with a spoken brief and questions answered aloud |
+| [Jarvis](projects/jarvis/README.md) | A claude.ai page (routines read live, sessions from a copy a daily routine saves), browser speech and the `sample` capability | What's waiting on you across your Claude sessions, with a spoken brief and questions answered aloud |
 | [Focus coach](projects/focus-coach/README.md) | A local page with push-to-talk, a small cheap model and a notes file | Talk your week through with something that remembers it, and never lose an idea |

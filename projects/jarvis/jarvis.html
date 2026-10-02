@@ -162,10 +162,11 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--border);color
         <span class="count" id="cMoving">– in motion</span>
         <span class="count" id="cRoutines">– routines</span>
       </div>
-      <div class="live"><span class="dot" id="liveDot"></span><span id="fresh">Connecting…</span><button class="link" id="refresh" type="button" hidden>Refresh</button></div>
+      <div class="live"><span class="dot" id="liveDot"></span><span id="fresh">Connecting…</span><button class="link" id="refresh" type="button" hidden>Refresh sessions</button></div>
     </div>
   </header>
 
+  <p class="secnote quiet" id="noteRefresh" role="status" hidden></p>
   <div class="banner" id="banner" role="status" hidden>
     <div class="btext"><span id="bannerText"></span><small id="bannerDetail"></small></div>
     <button type="button" class="btn small" id="allow" hidden>Allow</button>
@@ -209,7 +210,7 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--border);color
   <h2>Projects <span class="n">from your recent sessions</span></h2>
   <div class="grid" id="projects"><div class="empty">Checking…</div></div>
 
-  <footer>Live view of your Claude Code sessions and routines, read with your own sign-in. Read-only: Jarvis can look, never act.</footer>
+  <footer>Routines are read live with your own sign-in. Sessions come from a copy the “Jarvis morning refresh” routine makes every morning and whenever you tap Refresh sessions. Jarvis never changes anything; Refresh sessions only runs that routine.</footer>
 </div>
 
 <script>
@@ -218,13 +219,16 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--border);color
 const $ = id => document.getElementById(id);
 const SERVER = "Claude Code Remote";
 const DAY = 864e5;
-const SESS_IN = { limit: 100 };                  // the tool's maximum
 const TRIG_IN = { limit: 100, enabled: true };   // paused routines are filtered out by the connector
+// claude.ai doesn't let pages list sessions, so a routine copies them into this page's own
+// storage (every morning, and when you tap Refresh sessions) and the page reads that copy.
+const ROUTINE_NAME = "Jarvis morning refresh";
+const SNAP_PATH = "jarvis/sessions";
 // Codes that mean "you can't see this data here": what was shown is taken off the page.
 const AUTHZ = new Set(["needs_reauth", "server_not_connected", "server_not_found", "selection_required",
   "blocked_by_policy", "approval_required", "not_in_manifest", "not_granted", "capability_disabled",
   "capability_removed", "consent_required", "user_changed"]);
-const S = { sessions: null, triggers: null, sErr: null, tErr: null, sAt: 0, tAt: 0, sMore: false,
+const S = { sessions: null, triggers: null, sErr: null, tErr: null, sAt: 0, tAt: 0, sMore: false, refreshing: false, refreshAt: 0, refreshNote: "", db: null, dbRetries: 0,
   mcp: null, sample: null, sampleState: "pending", perms: null, permState: null,
   tMore: false, askCtl: null, turns: [], speaking: false, speakGen: 0, speechUnlocked: false, voices: [], retried: {} };
 const store = {
@@ -341,7 +345,10 @@ function routineSub(r) {
 function renderDate() {
   $("today").textContent = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 }
-function placeholder(box, err, checking) { box.textContent = ""; box.append(el("div", "empty", err ? "Not available right now." : checking)); }
+function placeholder(box, err, checking) {
+  box.textContent = "";
+  box.append(el("div", "empty", !err ? checking : err.code === "no_snapshot" ? "Waiting for the first sessions copy." : "Not available right now."));
+}
 
 function renderWaiting(c) {
   const box = $("waiting");
@@ -407,16 +414,21 @@ function renderProjects(c) {
     box.append(a);
   }
 }
-const deadWatch = e => !!e && (e.code === "bad_request" || e.code === "not_granted");
+const clock = t => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 function renderFresh() {
-  const dot = $("liveDot");
-  if (S.sessions && S.sAt) { $("fresh").textContent = "Live · updated " + ago(S.sAt); dot.className = "dot " + (S.sErr ? "stale" : "on"); }
-  else if (S.triggers && S.tAt) { $("fresh").textContent = "Routines live · sessions unavailable"; dot.className = "dot stale"; }
-  else if (S.sErr) { $("fresh").textContent = "Not connected"; dot.className = "dot off"; }
-  else { $("fresh").textContent = "Connecting…"; dot.className = "dot"; }
-  $("refresh").hidden = !S.mcp || (!S.sessions && !S.triggers && deadWatch(S.sErr) && deadWatch(S.tErr));
+  const dot = $("liveDot"), parts = [];
+  if (S.sessions && S.sAt) parts.push("Sessions as of " + clock(S.sAt) + (sameDay(S.sAt, Date.now()) ? "" : ", " + fmtDay(S.sAt)));
+  else if (S.sErr) parts.push(S.sErr.code === "no_snapshot" ? "No sessions copy yet" : "Sessions unavailable");
+  if (S.triggers && S.tAt) parts.push("routines live");
+  $("fresh").textContent = S.refreshing ? "Refreshing sessions…" : (parts.join(" · ") || "Connecting…");
+  dot.className = "dot " + (S.refreshing ? "stale" : S.sessions ? (sameDay(S.sAt, Date.now()) ? "on" : "stale") : (S.sErr || S.tErr) ? "off" : "");
+  const b = $("refresh");
+  b.hidden = !S.mcp;
+  b.disabled = S.refreshing;
+  $("noteRefresh").hidden = !S.refreshNote;
+  $("noteRefresh").textContent = S.refreshNote;
 }
-const toolOf = what => (what === "routines" ? "list_triggers" : "list_sessions");
 // The platform's own words and code, small, so a screenshot says exactly what was refused.
 const detailOf = e => (!e ? "" : (e.message ? cap(clean(e.message), 200) + " · " : "") + "code: " + e.code);
 function fixCopy(err, what) {
@@ -432,28 +444,39 @@ function fixCopy(err, what) {
         : "Jarvis isn't allowed to read your " + what + " in this view. Turn Claude Code Remote back on from this page's Permissions menu.";
     case "approval_required":
       return "Reading your " + what + " is set to need approval every time, and pages can't ask for approval yet. "
-        + "In claude.ai → Settings → Connectors → Claude Code Remote, let " + toolOf(what) + " run without approval (it only reads). "
+        + "In claude.ai → Settings → Connectors → Claude Code Remote, let list_triggers run without approval (it only reads). "
         + "If that setting is locked, your organization controls it.";
-    case "blocked_by_policy": return "Your organization's settings block this page from reading your " + what + " (" + toolOf(what) + ").";
+    case "blocked_by_policy": return "Your organization's settings block this page from reading your " + what + " (list_triggers).";
     case "not_granted": case "capability_disabled": case "capability_removed": return "Live data isn't available in this view. Open the page in claude.ai, signed in.";
     case "server_unavailable": return "Couldn't refresh your " + what + " just now. Showing the last update; it will try again shortly.";
     case "shape": return "Your " + what + " came back in a format Jarvis doesn't recognise.";
+    case "no_snapshot": return "No sessions copy yet. One is made every morning, or tap Refresh sessions now.";
+    case "no_db": case "db_not_granted": case "db_capability_disabled": case "db_capability_removed":
+      return "This page's storage isn't available in this view, so it can't show your sessions. Open it in claude.ai, signed in.";
+    case "db_revoked": return "Your sessions aren't available in this view any more.";
+    case "db_retrying": return "Lost the connection to your sessions copy. Reconnecting…";
+    case "db_stuck": return "Couldn't reconnect to your sessions copy. Reload the page to see new copies.";
     default: return "Couldn't load your " + what + (err && err.message ? ": " + err.message : ".");
   }
 }
-const hard = e => !!e && (AUTHZ.has(e.code) || e.code === "bad_request" || e.code === "shape");
+const hard = e => !!e && (AUTHZ.has(e.code) || e.code === "bad_request" || e.code === "shape" || e.code === "no_db"
+  || /^db_(revoked|not_granted|capability_disabled|capability_removed)$/.test(e.code));
 function renderProblems() {
   const se = S.sErr, te = S.tErr, banner = $("banner"), allow = $("allow");
-  if (hard(se)) {
+  const consent = e => !!e && (e.code === "not_in_manifest" || e.code === "consent_required");
+  // Session problems lead the banner. A routines permission question goes there too, since Allow lives there.
+  const be = hard(se) ? se : consent(te) ? te : null, what = be === se ? "sessions" : "routines";
+  if (be) {
     banner.hidden = false;
-    $("bannerText").textContent = fixCopy(se, "sessions");
-    $("bannerDetail").textContent = detailOf(se);
-    allow.hidden = !(S.perms && (se.code === "not_in_manifest" || se.code === "consent_required") && S.permState === "prompt");
+    $("bannerText").textContent = fixCopy(be, what);
+    $("bannerDetail").textContent = detailOf(be);
+    allow.hidden = !(S.perms && consent(be) && S.permState === "prompt");
   } else { banner.hidden = true; allow.hidden = true; }
   const soft = se && !hard(se);
   $("noteSessions").hidden = !soft;
+  $("noteSessions").classList.toggle("quiet", !!(se && se.code === "no_snapshot"));
   if (soft) $("noteSessions").textContent = fixCopy(se, "sessions");
-  const showT = !!te && !(hard(se) && te.code === se.code);
+  const showT = !!te && te !== be && !(be && te.code === be.code);
   $("noteRoutines").hidden = !showT;
   if (showT) $("noteRoutines").textContent = fixCopy(te, "routines") + (hard(te) ? " (" + detailOf(te) + ")" : "");
 }
@@ -488,22 +511,37 @@ function retract() {
   const a = $("answer"); a.textContent = ""; a.hidden = true;
   syncStop();
 }
-function onSessions(ev) {
-  if (ev.type === "data") {
-    const got = parsePayload(ev.result && ev.result.payload);
-    if (!got) S.sErr = { code: "shape" };
-    else {
-      S.sessions = got.rows; S.sMore = got.more; S.sErr = null; S.retried.list_sessions = false;
-      S.sAt = (ev.result.cache && ev.result.cache.storedAt) || Date.now();
-    }
-  } else {
-    const e = ev.error || { code: "upstream_error" };
-    S.sErr = e;
-    if (AUTHZ.has(e.code)) { const had = S.sessions !== null; S.sessions = null; S.sMore = false; if (had) retract(); }
-    else maybeRetry("list_sessions", SESS_IN, e);
-    checkPerm();
+// The sessions copy the refresh routine leaves in this page's storage (delivered live).
+function onSnapshotDoc(snap) {
+  const d = snap && snap.exists ? (snap.data() || {}) : null;
+  if (!d) { S.sessions = null; S.sMore = false; S.sErr = { code: "no_snapshot" }; }
+  else if (!Array.isArray(d.sessions)) S.sErr = { code: "shape" };
+  else {
+    S.sessions = d.sessions; S.sMore = !!d.has_more; S.sErr = null; S.dbRetries = 0;
+    S.sAt = when(d.refreshed_at) || S.sAt || Date.now();
+    if (S.refreshing && S.sAt >= S.refreshAt - 60000) { S.refreshing = false; S.refreshNote = ""; }
   }
   renderAll();
+}
+const DB_GONE = new Set(["revoked", "not_granted", "capability_disabled", "capability_removed"]);
+function onSnapshotError(e) {
+  const code = (e && e.code) || "unavailable";
+  if (DB_GONE.has(code)) {
+    const had = S.sessions !== null;
+    S.sessions = null; S.sMore = false;
+    S.sErr = { code: "db_" + code, message: e && e.message };
+    if (had) retract();
+  } else if (S.dbRetries < 2) {
+    // The platform ends a listener it can't keep alive; a new one is the only way back.
+    S.dbRetries++;
+    S.sErr = { code: "db_retrying" };
+    setTimeout(listenSnapshot, 3000 * S.dbRetries);
+  } else S.sErr = { code: "db_stuck", message: e && e.message };
+  renderAll();
+}
+function listenSnapshot() {
+  try { S.db.doc(SNAP_PATH).onSnapshot(onSnapshotDoc, onSnapshotError); }
+  catch (_) { S.sErr = { code: "no_db" }; renderAll(); }
 }
 function onTriggers(ev) {
   if (ev.type === "data") {
@@ -516,6 +554,7 @@ function onTriggers(ev) {
   } else {
     const e = ev.error || { code: "upstream_error" };
     S.tErr = e;
+    if (e.code === "not_in_manifest" || e.code === "consent_required") checkPerm();
     if (AUTHZ.has(e.code)) { const had = S.triggers !== null; S.triggers = null; S.tMore = false; if (had) retract(); }
     else maybeRetry("list_triggers", TRIG_IN, e);
   }
@@ -600,6 +639,10 @@ const sayable = t => noEmoji(String(t)).replace(/\s*\+\s*/g, " and ").replace(/&
   .replace(/\s*[;|]\s*/g, ", ").replace(/[.!?…]+$/, "").replace(/\s+/g, " ").trim();
 function sessionBrief(parts) {
   const c = classify(S.sessions), n = c.waiting.length;
+  // The copy is from this morning or the last refresh: say when, if it isn't fresh.
+  if (S.sAt && Date.now() - S.sAt > 15 * 60000) parts.push("As of " +
+    new Date(S.sAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) +
+    (sameDay(S.sAt, Date.now()) ? "" : " on " + new Date(S.sAt).toLocaleDateString(undefined, { weekday: "long" })) + ":");
   if (!n) parts.push(S.sMore ? "Nothing is waiting on you in your newest 100 sessions." : "Nothing is waiting on you right now.");
   else {
     parts.push(n === 1 ? "One thing is waiting on you." : n + " things are waiting on you.");
@@ -613,7 +656,9 @@ function briefText() {
   const h = new Date().getHours();
   const parts = [h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening."];
   if (S.sessions) sessionBrief(parts);
-  else parts.push("I can't see your sessions right now, so I don't know what's waiting.");
+  else parts.push(S.sErr && S.sErr.code === "no_snapshot"
+    ? "I don't have a copy of your sessions yet. Tap Refresh sessions and I'll fetch one."
+    : "I can't see your sessions right now, so I don't know what's waiting.");
   const now = Date.now(), nx = S.triggers ? routinesOf(S.triggers).find(r => !r.manual && r.next > now) : null;
   if (nx) parts.push("Next routine: " + (sayable(nx.name) || "an unnamed routine") + ", " +
     new Date(nx.next).toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" }) + ".");
@@ -644,6 +689,7 @@ function snapshot() {
   if (!S.sessions) lines.push("", "Sessions: not available right now.");
   else {
     const c = classify(S.sessions);
+    lines.push("", "Sessions copy taken " + ago(S.sAt) + " (it is refreshed every morning and on request).");
     if (S.sMore) lines.push("", "Note: only the newest 100 sessions were checked; older ones may also need the user.");
     lines.push("", "Waiting on the user (" + c.waiting.length + "):");
     c.waiting.forEach(w => lines.push("- " + plain(w.title) + " [" + w.kind + ", updated " + ago(w.t) + "]: " + (w.ask || "no details")));
@@ -686,6 +732,13 @@ function disableAsk(msg) {
 async function ask(q) {
   q = q.trim();
   if (!q || S.askCtl) return;
+  if (/^(please\s+)?(refresh|update)(\s+(jarvis|my sessions|sessions|the sessions|it))?[\s.!]*$/i.test(q)) {
+    const ok = await fireRefresh();
+    const msg = ok ? "Refreshing your sessions now. It usually takes a minute or two." : (S.refreshNote || "Couldn't start the refresh.");
+    showAnswer("You asked: " + q, msg, ok ? "" : "note");
+    if (ok && $("speakOn").checked) speak(msg);
+    return;
+  }
   if (S.sampleState === "pending") { showAnswer("You asked: " + q, "Still connecting to Claude. Try again in a moment.", "note"); $("q").value = q; return; }
   if (!S.sample) { showAnswer("You asked: " + q, sampleCopy("capability_disabled"), "note"); return; }
   if (S.speaking) hush();
@@ -724,6 +777,44 @@ async function ask(q) {
   }
 }
 
+// Run the refresh routine now. Its new copy arrives through the storage subscription.
+async function fireRefresh() {
+  if (!S.mcp || S.refreshing) return false;
+  const r = (S.triggers || []).find(t => t && t.id && clean(t.name) === ROUTINE_NAME);
+  if (!r) {
+    S.refreshNote = S.triggers
+      ? "Couldn't find the “" + ROUTINE_NAME + "” routine, so there's nothing to run. It may have been renamed or deleted."
+      : "Still loading your routines. Try again in a moment.";
+    renderFresh();
+    return false;
+  }
+  const started = Date.now();
+  S.refreshing = true; S.refreshAt = started; S.refreshNote = "";
+  renderFresh();
+  try {
+    await S.mcp.callTool(SERVER, "fire_trigger", { trigger_id: String(r.id) }, { cache: false });
+    S.mcp.invalidate(SERVER, "list_triggers").catch(() => {});
+    setTimeout(() => {
+      if (S.refreshing && S.refreshAt === started) {
+        S.refreshing = false;
+        S.refreshNote = "The refresh is taking longer than usual. The new copy will appear here when it lands.";
+        renderAll();
+      }
+    }, 5 * 60000);
+    return true;
+  } catch (e) {
+    S.refreshing = false;
+    const code = e && e.code;
+    S.refreshNote = (code === "blocked_by_policy" || code === "not_in_manifest" || code === "approval_required" || code === "consent_required")
+      ? "This page isn't allowed to start the refresh. In any Claude chat, say “run my Jarvis morning refresh routine”, or run it from your routines in claude.ai."
+      : (code === "server_unavailable" || code === "upstream_error")
+      ? "Not sure the refresh started (" + code + "). If no new copy appears in a few minutes, tap Refresh sessions again."
+      : "Couldn't start the refresh (" + (code || "error") + "). Try again in a minute.";
+    renderFresh();
+    return false;
+  }
+}
+
 // ---- controls -------------------------------------------------------------------------
 $("brief").addEventListener("click", () => {
   const c = S.askCtl;
@@ -747,13 +838,7 @@ $("speakOn").addEventListener("change", () => {
   store.set("jarvis.speak", $("speakOn").checked ? "1" : "0");
   if ($("speakOn").checked) unlockSpeech(); else hush();
 });
-$("refresh").addEventListener("click", () => {
-  if (!S.mcp) return;
-  const b = $("refresh");
-  b.disabled = true; setTimeout(() => { b.disabled = false; }, 5000);
-  $("fresh").textContent = "Refreshing…";
-  S.mcp.invalidate(SERVER).catch(() => renderFresh());
-});
+$("refresh").addEventListener("click", () => { fireRefresh(); });
 $("allow").addEventListener("click", async () => {
   const b = $("allow");
   b.disabled = true;
@@ -791,12 +876,15 @@ async function boot() {
     if (!s) disableAsk("Asking Claude isn't available in this view. Brief me still works.");
   }, () => { S.sampleState = "absent"; disableAsk("Asking Claude isn't available in this view. Brief me still works."); });
 
+  c.use("db").then(db => {
+    if (!db) { S.sErr = { code: "no_db" }; renderAll(); return; }
+    S.db = db; listenSnapshot();
+  }, () => { S.sErr = { code: "no_db" }; renderAll(); });
+
   let mcp = null;
   try { mcp = await c.use("mcp"); } catch (_) { mcp = null; }
-  if (!mcp) { S.sErr = S.tErr = { code: "not_granted" }; renderAll(); return; }
+  if (!mcp) { S.tErr = { code: "not_granted" }; renderAll(); return; }
   S.mcp = mcp;
-  mcp.watchTool(SERVER, "list_sessions", SESS_IN, onSessions,
-    { cache: { staleTime: 60000, gcTime: 3600000 }, refetchInterval: 120000 });
   mcp.watchTool(SERVER, "list_triggers", TRIG_IN, onTriggers,
     { cache: { staleTime: 300000, gcTime: 3600000 }, refetchInterval: 600000 });
   renderAll();

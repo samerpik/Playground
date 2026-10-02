@@ -1,6 +1,7 @@
-"""Jarvis v2 in real Chromium, with a stand-in for claude.ai's runtime (window.claude) serving
-SYNTHETIC sessions/routines shaped like the real Claude Code Remote payloads, and a speech engine
-stand-in that queues, starts, ends and cancels like a real one."""
+"""Jarvis v3 in real Chromium, with a stand-in for claude.ai's runtime (window.claude): SYNTHETIC
+routines shaped like the real Claude Code Remote payloads, a sessions copy in the page's own storage
+(what the "Jarvis morning refresh" routine writes), and a speech engine stand-in that queues,
+starts, ends and cancels like a real one."""
 import os, sys, tempfile
 from playwright.sync_api import sync_playwright
 
@@ -17,7 +18,8 @@ open(f"{SCR}/jarvis_test.html", "w", encoding="utf-8").write(DOC)
 STUB = r"""
 (() => {
   const now = Date.now(), iso = ms => new Date(ms).toISOString(), H = 3600e3, D = 864e5;
-  Object.assign(window, {__calls: [], __spoken: [], __unlocks: 0, __cancels: 0, __sampleCalls: [], __invalidated: 0, __permReq: 0, __speakMs: 15});
+  Object.assign(window, {__calls: [], __spoken: [], __unlocks: 0, __cancels: 0, __sampleCalls: [], __invalidated: 0, __permReq: 0, __speakMs: 15,
+    __toolCalls: [], __dbPaths: [], __routineMs: 300});
   const base = [
     {id: "s1", title: "🧪 Test project alpha", session_status: "SESSION_STATUS_IDLE", status_bucket: "SESSION_STATUS_BUCKET_BLOCKED",
      updated_at: iso(now - 2 * D), post_turn_summary: {status_category: "need_input", needs_action: "- **The choice:** X or Y?"},
@@ -53,31 +55,57 @@ STUB = r"""
     {id: "t2", name: "One-off nudge", cron_expression: "", run_once_at: iso(now + 10 * D), enabled: true, next_run_at: iso(now + 10 * D)},
     {id: "t3", name: "Disabled one", enabled: false},
     {id: "t4", name: "Broken routine", cron_expression: "0 7 * * *", enabled: true, next_run_at: iso(now + 2 * H), last_run: {status: "ROUTINE_RUN_STATUS_FAILED"}},
+    {id: "trig_jarvis", name: "Jarvis morning refresh", cron_expression: "CRON_TZ=Europe/London 54 7 * * *", enabled: true,
+     next_run_at: iso(now + 20 * H), last_run: {status: "ROUTINE_RUN_STATUS_SUCCEEDED"}},
   ];
   const trigEdge = [
     {id: "t5", name: "Overdue routine", cron_expression: "0 6 * * *", enabled: true, next_run_at: iso(now - H)},
     {id: "t6", name: "Manual routine", cron_expression: "", enabled: true},
   ];
   const isEdge = () => window.__dataset === "edge";
-  const sessPayload = () => ({ccr: {data: isEdge() ? base.concat(edge) : base, has_more: isEdge()}});
-  const trigPayload = () => ({data: isEdge() ? trigBase.concat(trigEdge) : trigBase, has_more: isEdge()});
   const mode = () => window.__mode || "ok";
+  const trigPayload = () => ({data: (isEdge() ? trigBase.concat(trigEdge) : trigBase)
+    .filter(t => !(window.__noJarvisRoutine && t.id === "trig_jarvis")), has_more: isEdge()});
+  // The sessions copy the refresh routine writes into the page's own storage, delivered live.
+  window.__snapFor = () => mode() === "nosnap" ? null :
+    {refreshed_at: iso(window.__snapAt || now - 2 * 60e3), has_more: isEdge(), sessions: isEdge() ? base.concat(edge) : base};
+  const listeners = [];
+  const send = (l, d) => l.next({id: "sessions", exists: !!d, data: () => (d ? JSON.parse(JSON.stringify(d)) : undefined)});
+  window.__pushSnap = d => listeners.slice().forEach(l => send(l, d));
+  window.__dbError = code => listeners.splice(0).forEach(l => l.error({code, message: "db " + code}));  // ends the listeners
+  const db = Object.freeze({doc(path) {
+    window.__dbPaths.push(path);
+    return {onSnapshot(next, error) {
+      const l = {next, error};
+      listeners.push(l);
+      setTimeout(() => send(l, window.__snapFor()), 20);
+      return () => { const i = listeners.indexOf(l); if (i >= 0) listeners.splice(i, 1); };
+    }};
+  }});
   const fires = [];
   const mcp = Object.freeze({
     watchTool(server, tool, input, handler, opts) {
       window.__calls.push({server, tool, input, opts});
       const fire = () => {
         if (mode() === "deny") handler({type: "error", error: {code: "not_in_manifest", message: "declined"}});
-        else if (mode() === "policy" && tool === "list_sessions") handler({type: "error", error: {code: "approval_required", message: "This tool requires approval before each use"}});
-        else if (mode() === "flaky" && tool === "list_triggers") handler({type: "error", error: {code: "server_unavailable", retryable: true, message: "5xx"}});
-        else handler({type: "data", result: {content: [{type: "text", text: "{}"}], payload: tool === "list_sessions" ? sessPayload() : trigPayload()}});
+        else if (mode() === "flaky") handler({type: "error", error: {code: "server_unavailable", retryable: true, message: "5xx"}});
+        else handler({type: "data", result: {content: [{type: "text", text: "{}"}], payload: trigPayload()}});
       };
       setTimeout(fire, 20); fires.push(fire);
       window.__refireAll = () => fires.forEach(f => setTimeout(f, 5));
       return () => {};
     },
     invalidate(server, tool, input) { window.__invalidated++; (window.__invalidations = window.__invalidations || []).push([server, tool || null]); if (!window.__noRefire) fires.forEach(f => setTimeout(f, 10)); return Promise.resolve(); },
-    callTool() { return Promise.reject({code: "bad_request", message: "not used"}); },
+    callTool(server, tool, input, opts) {
+      window.__toolCalls.push({server, tool, input, opts});
+      if (tool !== "fire_trigger") return Promise.reject({code: "bad_request", message: "not used"});
+      if (window.__fireFail) return Promise.reject({code: window.__fireFail, message: "fire " + window.__fireFail});
+      // The routine runs, then its new copy reaches the page through the storage subscription.
+      setTimeout(() => window.__pushSnap({refreshed_at: new Date().toISOString(), has_more: false, sessions: base.concat([
+        {id: "s9", title: "Fresh from refresh", session_status: "SESSION_STATUS_IDLE", status_bucket: "SESSION_STATUS_BUCKET_BLOCKED",
+         updated_at: new Date().toISOString(), post_turn_summary: {status_category: "need_input", needs_action: "a new question"}}])}), window.__routineMs);
+      return Promise.resolve({content: [{type: "text", text: "{}"}], payload: {}});
+    },
   });
   const sample = Object.assign((input, opts) => new Promise((resolve, reject) => {
     window.__sampleCalls.push({input, opts: {modelTier: opts && opts.modelTier, cache: opts && opts.cache,
@@ -101,7 +129,8 @@ STUB = r"""
   window.claude = {use: name => new Promise(r => setTimeout(() => r(
     (mode() === "nomcp" && name === "mcp") ? null :
     (mode() === "nosample" && name === "sample") ? null :
-    name === "mcp" ? mcp : name === "sample" ? sample : name === "permissions" ? perms : null), 30))};
+    (mode() === "nodb" && name === "db") ? null :
+    name === "mcp" ? mcp : name === "sample" ? sample : name === "permissions" ? perms : name === "db" ? db : null), 30))};
   // A speech engine that behaves like the real one: a queue, start/end events, cancel => "interrupted".
   const voices = [{name: "Bubbles", lang: "en-US", default: false}, {name: "Daniel", lang: "en-GB", default: false},
                   {name: "Samantha (Enhanced)", lang: "en-US", default: true}];
@@ -134,10 +163,10 @@ def check(name, cond, detail=""):
         print(f"FAIL: {name} {detail}"); sys.exit(1)
     passed += 1; print(f"  ok  {name}")
 
-def open_page(browser, mode="ok", dark=False, width=1000, dataset="base"):
+def open_page(browser, mode="ok", dark=False, width=1000, dataset="base", extra=""):
     ctx = browser.new_context(viewport={"width": width, "height": 900}, color_scheme="dark" if dark else "light")
     ctx.route("https://fonts.googleapis.com/**", lambda r: r.fulfill(status=200, content_type="text/css", body=""))
-    ctx.add_init_script(f"window.__mode = {mode!r}; window.__dataset = {dataset!r};" + STUB)
+    ctx.add_init_script(f"window.__mode = {mode!r}; window.__dataset = {dataset!r};" + extra + STUB)
     page = ctx.new_page()
     logs = []
     page.on("console", lambda m: logs.append((m.type, m.text)) if m.type in ("error", "warning") else None)
@@ -146,7 +175,9 @@ def open_page(browser, mode="ok", dark=False, width=1000, dataset="base"):
     return ctx, page, logs
 ev = lambda p, js: p.evaluate(js)
 texts = lambda p, sel: p.eval_on_selector_all(sel, "els => els.map(e => e.textContent)")
-live = lambda p: p.wait_for_function("() => document.getElementById('fresh').textContent.startsWith('Live')")
+live = lambda p: p.wait_for_function("() => { const t = document.getElementById('fresh').textContent;"
+                                    " return t.startsWith('Sessions as of') && t.endsWith('routines live'); }")
+done_speaking = lambda p: p.wait_for_function("() => window.__spoken.length > 0 && document.getElementById('stop').hidden")
 def ask(page, q):
     n = ev(page, "window.__sampleCalls.length")
     page.fill("#q", q); page.press("#q", "Enter")
@@ -162,12 +193,12 @@ with sync_playwright() as pw:
     today = ev(page, "new Date().toLocaleDateString(undefined, {weekday:'long', day:'numeric', month:'long', year:'numeric'})")
     check("header shows today's date from the viewer's clock (never a stale baked-in date)", page.inner_text("#today") == today, page.inner_text("#today"))
     calls = ev(page, "window.__calls")
-    check("reads exactly two read-only tools on Claude Code Remote",
-          sorted(c["tool"] for c in calls) == ["list_sessions", "list_triggers"] and all(c["server"] == "Claude Code Remote" for c in calls), calls)
-    inputs = {c["tool"]: c["input"] for c in calls}
-    check("asks for the tools' maximum and only active routines",
-          inputs == {"list_sessions": {"limit": 100}, "list_triggers": {"limit": 100, "enabled": True}}, inputs)
-    check("watches refresh themselves while the page is open", all(c["opts"].get("refetchInterval", 0) >= 30000 for c in calls))
+    check("reads routines live from Claude Code Remote: one read-only tool, its maximum, active routines only",
+          [(c["server"], c["tool"], c["input"]) for c in calls] == [("Claude Code Remote", "list_triggers", {"limit": 100, "enabled": True})], calls)
+    check("the routines watch refreshes itself while the page is open", calls[0]["opts"].get("refetchInterval", 0) >= 30000)
+    check("sessions come from the copy in the page's own storage (pages can't list sessions)",
+          ev(page, "window.__dbPaths") == ["jarvis/sessions"], ev(page, "window.__dbPaths"))
+    check("opening the page runs nothing", ev(page, "window.__toolCalls") == [])
     names = texts(page, "#waiting .name")
     check("waiting = blocked + review-ready + failed, newest first; stale (30d) and archived left out",
           names == ["Beta review", "<img src=x onerror=window.__xss=1>", "🧪 Test project alpha"], names)
@@ -178,25 +209,25 @@ with sync_playwright() as pw:
     moving = page.inner_text("#moving")
     check("working and just-finished sessions shown, with what finished", "Delta working" in moving and "Gamma finished" in moving and "report ready on Desktop" in moving, moving)
     routines = texts(page, "#routines .lt b")
-    check("routines: soonest next run first (paused ones never requested)", routines == ["Broken routine", "Morning triage", "One-off nudge"], routines)
+    check("routines: soonest next run first (paused ones never requested)", routines == ["Broken routine", "Morning triage", "Jarvis morning refresh", "One-off nudge"], routines)
     check("a routine whose last run failed says so", "Last run failed" in page.inner_text("#routines"))
     projs = texts(page, "#projects .pt")
     hrefs = page.eval_on_selector_all("#projects a", "els => els.map(e => e.getAttribute('href'))")
     check("projects come from session-linked artifacts; javascript: links and Jarvis itself are dropped",
           projs == ["Alpha Board", "Epsilon Monogram"] and all(h.startswith("https://claude.ai/") for h in hrefs), (projs, hrefs))
-    check("header counts match", page.inner_text("#cWait") == "3" and page.inner_text("#cMoving") == "2 in motion" and page.inner_text("#cRoutines") == "3 routines",
+    check("header counts match", page.inner_text("#cWait") == "3" and page.inner_text("#cMoving") == "2 in motion" and page.inner_text("#cRoutines") == "4 routines",
           (page.inner_text("#cWait"), page.inner_text("#cMoving"), page.inner_text("#cRoutines")))
-    check("freshness shown, no 'older sessions' caveat when nothing was cut", page.inner_text("#fresh") == "Live · updated just now" and page.is_hidden("#noteMore"))
+    want = ev(page, "'Sessions as of ' + new Date(Date.parse(window.__snapFor().refreshed_at))"
+                    ".toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'}) + ' · routines live'")
+    check("says when the sessions copy was taken; no 'older sessions' caveat when nothing was cut",
+          page.inner_text("#fresh") == want and page.is_hidden("#noteMore"), (page.inner_text("#fresh"), want))
+    check("a Refresh sessions button is there", page.is_visible("#refresh") and page.inner_text("#refresh") == "Refresh sessions")
     opts = page.eval_on_selector_all("#voicePick option", "els => els.map(e => e.value)")
     check("novelty voices are filtered out of the voice picker", "Bubbles" not in opts and "Samantha (Enhanced)" in opts, opts)
     page.focus("#projects a")
-    ev(page, "window.__refireAll(); document.dispatchEvent(new Event('visibilitychange'))")
+    ev(page, "window.__refireAll(); window.__pushSnap(window.__snapFor()); document.dispatchEvent(new Event('visibilitychange'))")
     page.wait_for_timeout(150)
     check("a data refresh with unchanged projects keeps keyboard focus on the link", ev(page, "document.activeElement && document.activeElement.className") == "proj")
-    page.click("#refresh")
-    page.wait_for_function("() => window.__invalidated === 1")
-    live(page)
-    check("Refresh asks the watches to fetch again, then shows Live again", page.inner_text("#fresh").startswith("Live"))
 
     print("hear it")
     page.click("#brief")
@@ -268,21 +299,25 @@ with sync_playwright() as pw:
     check("no page errors or console errors", not bad, bad)
     sw = ev(page, "[document.documentElement.scrollWidth, document.documentElement.clientWidth]")
     check("no sideways scroll on desktop", sw[0] <= sw[1], sw)
-    page.screenshot(path=f"{SCR}/jarvis_v2_light.png", full_page=True)
+    page.screenshot(path=f"{SCR}/jarvis_v3_light.png", full_page=True)
 
     print("losing access mid-session")
     ask(page, "remember this")
-    ev(page, "window.__mode = 'deny'")
-    page.wait_for_timeout(5100)   # Refresh is rate-limited to once per 5 s
-    page.click("#refresh")
-    page.wait_for_function("() => !document.getElementById('banner').hidden")
-    check("a denial takes the data AND the answers built from it off the page",
-          page.is_hidden("#answer") and "Not available right now." in page.inner_text("#waiting") and page.inner_text("#cWait") == "–")
+    ev(page, "window.__mode = 'deny'; window.__refireAll()")
+    page.wait_for_function("() => !document.getElementById('allow').hidden")
+    check("losing the connector takes the routines AND the answers built from them off the page",
+          page.is_hidden("#answer") and "Not available right now." in page.inner_text("#routines") and page.inner_text("#cRoutines") == "– routines")
+    check("…and the banner asks for the OK again", "read your routines. Tap Allow." in page.inner_text("#bannerText"), page.inner_text("#bannerText"))
     page.click("#allow")
-    page.wait_for_function("() => window.__permReq === 1")
-    live(page)
+    page.wait_for_function("() => window.__permReq === 1 && document.getElementById('cRoutines').textContent === '4 routines'")
     t3 = ask(page, "fresh start?")["input"]
     check("after allowing again, the old conversation is not re-sent", len(t3) == 2, [t["content"][:40] for t in t3])
+    ev(page, "window.__dbError('revoked')")
+    page.wait_for_function("() => !document.getElementById('banner').hidden")
+    check("losing the sessions copy takes it, and the answers, off the page too",
+          page.is_hidden("#answer") and "Not available right now." in page.inner_text("#waiting") and page.inner_text("#cWait") == "–"
+          and "aren't available in this view" in page.inner_text("#bannerText") and "code: db_revoked" in page.inner_text("#bannerDetail"),
+          (page.inner_text("#bannerText"), page.inner_text("#bannerDetail")))
     ctx.close()
 
     print("iPhone speech unlock")
@@ -348,12 +383,13 @@ with sync_playwright() as pw:
 
     print("degraded states")
     ctx, page, logs = open_page(browser, mode="deny")
-    page.wait_for_function("() => !document.getElementById('banner').hidden && !document.getElementById('allow').hidden")
-    check("declined connector: clear banner with an Allow button", "Tap Allow" in page.inner_text("#bannerText"), page.inner_text("#bannerText"))
+    page.wait_for_function("() => !document.getElementById('allow').hidden && document.getElementById('cWait').textContent === '3'")
+    check("declined connector: the banner asks for the OK with an Allow button, and sessions still show",
+          "read your routines. Tap Allow." in page.inner_text("#bannerText"), page.inner_text("#bannerText"))
     page.click("#allow")
     page.wait_for_function("() => window.__permReq === 1 && window.__invalidated === 1")
     live(page)
-    check("Allow asks once, then the data loads", ev(page, "window.__permReq") == 1 and page.inner_text("#cWait") == "3")
+    check("Allow asks once, then the routines load", ev(page, "window.__permReq") == 1 and page.inner_text("#cRoutines") == "4 routines")
     ctx.close()
 
     ctx, page, logs = open_page(browser, mode="deny")
@@ -362,30 +398,111 @@ with sync_playwright() as pw:
     page.click("#allow")
     page.wait_for_function("() => window.__permReq === 1")
     page.wait_for_timeout(100)
-    check("right after Allow, the banner says it's loading (not 'isn't allowed')", page.inner_text("#bannerText") == "Allowed. Loading your sessions…", page.inner_text("#bannerText"))
+    check("right after Allow, the banner says it's loading (not 'isn't allowed')", page.inner_text("#bannerText") == "Allowed. Loading your routines…", page.inner_text("#bannerText"))
     ctx.close()
 
-    print("sessions refused, routines allowed (the real-viewer case)")
-    ctx, page, logs = open_page(browser, mode="policy", width=760)
-    page.wait_for_function("() => !document.getElementById('banner').hidden && document.querySelectorAll('#routines .line').length === 3")
-    bt, bd = page.inner_text("#bannerText"), page.inner_text("#bannerDetail")
-    check("the banner says it's an approval setting, names the tool, and shows the platform's code",
-          "need approval every time" in bt and "list_sessions" in bt and "code: approval_required" in bd and "requires approval" in bd, (bt, bd))
-    check("routines still load, and the status says it's a partial connection", page.inner_text("#fresh") == "Routines live · sessions unavailable", page.inner_text("#fresh"))
+    print("no sessions copy yet, then Refresh sessions (at 760px)")
+    ctx, page, logs = open_page(browser, mode="nosnap", width=760)
+    page.wait_for_function("() => !document.getElementById('noteSessions').hidden && document.querySelectorAll('#routines .line').length === 4")
+    fr = page.inner_text("#fresh")
+    check("before the first copy: says so plainly, as a note rather than an error",
+          "Waiting for the first sessions copy." in page.inner_text("#waiting") and "tap Refresh sessions now" in page.inner_text("#noteSessions")
+          and page.is_hidden("#banner") and fr == "No sessions copy yet · routines live", fr)
     w = ev(page, "document.querySelector('#routines .lt').getBoundingClientRect().width")
     check("in a mid-width panel (760px) routine names get room (no more 'Inbo / x')", w > 200, w)
     page.click("#brief")
-    page.wait_for_function("() => window.__spoken.length > 0 && document.getElementById('stop').hidden")
+    done_speaking(page)
     sp = " ".join(ev(page, "window.__spoken"))
-    check("without sessions, the brief still gives the next routine", "can't see your sessions" in sp and "Next routine: Broken routine" in sp, sp)
+    check("the brief says there's no copy yet, and still gives the next routine",
+          "don't have a copy of your sessions yet" in sp and "Next routine: Broken routine" in sp, sp)
+    ev(page, "window.__routineMs = 600")
+    page.click("#refresh")
+    page.wait_for_function("() => document.getElementById('fresh').textContent === 'Refreshing sessions…'")
+    tc = ev(page, "window.__toolCalls")
+    check("Refresh sessions runs the Jarvis routine by its id, once, uncached",
+          [(c["server"], c["tool"], c["input"], c["opts"]) for c in tc]
+          == [("Claude Code Remote", "fire_trigger", {"trigger_id": "trig_jarvis"}, {"cache": False})], tc)
+    check("while it runs, the button can't be tapped again", page.is_disabled("#refresh"))
+    page.wait_for_function("() => document.getElementById('fresh').textContent.startsWith('Sessions as of')")
+    check("the new copy appears by itself when the routine saves it",
+          "Fresh from refresh" in page.inner_text("#waiting") and page.is_hidden("#noteSessions") and not page.is_disabled("#refresh"))
+    inv = ev(page, "window.__invalidations || []")
+    check("routines are re-read after starting it, so its last run shows", inv == [["Claude Code Remote", "list_triggers"]], inv)
+    ctx.close()
+
+    print("asking for a refresh, and when it can't run")
+    ctx, page, logs = open_page(browser)
+    live(page)
+    page.fill("#q", "Refresh Jarvis"); page.press("#q", "Enter")
+    page.wait_for_function("() => window.__toolCalls.length === 1")
+    check("saying 'refresh Jarvis' runs the routine instead of asking Claude",
+          ev(page, "window.__toolCalls[0].tool") == "fire_trigger" and ev(page, "window.__sampleCalls.length") == 0
+          and "Refreshing your sessions now" in page.inner_text("#answer .atext"))
+    page.wait_for_function("() => window.__spoken.some(s => s.startsWith('Refreshing your sessions now'))")
+    page.wait_for_function("() => document.getElementById('waiting').textContent.includes('Fresh from refresh')")
+    check("…and the new copy lands", page.inner_text("#cWait") == "4", page.inner_text("#cWait"))
+    ev(page, "window.__fireFail = 'blocked_by_policy'")
+    page.click("#refresh")
+    page.wait_for_function("() => !document.getElementById('noteRefresh').hidden")
+    check("if claude.ai won't let the page start it, it says how to run it instead",
+          "say “run my Jarvis morning refresh routine”" in page.inner_text("#noteRefresh")
+          and page.inner_text("#fresh").startswith("Sessions as of"), page.inner_text("#noteRefresh"))
+    ev(page, "window.__fireFail = 'server_unavailable'")
+    page.click("#refresh")
+    page.wait_for_function("() => document.getElementById('noteRefresh').textContent.startsWith('Not sure the refresh started')")
+    page.wait_for_timeout(2000)
+    check("an unclear failure (it may have run) is never re-run without a new tap", ev(page, "window.__toolCalls.length") == 3)
+    bad = [l for l in logs if l[0] in ("error", "pageerror")]
+    check("no page errors or console errors", not bad, bad)
+    ctx.close()
+
+    ctx, page, logs = open_page(browser, extra="window.__noJarvisRoutine = true;")
+    live(page)
+    page.click("#refresh")
+    page.wait_for_function("() => !document.getElementById('noteRefresh').hidden")
+    check("if the routine was renamed or deleted, Refresh says so and runs nothing",
+          "Couldn't find the “Jarvis morning refresh” routine" in page.inner_text("#noteRefresh") and ev(page, "window.__toolCalls") == [])
+    ctx.close()
+
+    print("an old copy")
+    ctx, page, logs = open_page(browser, extra="window.__snapAt = Date.now() - 30 * 3600e3;")
+    live(page)
+    fr = page.inner_text("#fresh")
+    day = ev(page, "new Date(window.__snapAt).toLocaleDateString(undefined, {day: 'numeric', month: 'short'})")
+    check("a copy from another day shows its date, and the status dot turns amber",
+          fr.startswith("Sessions as of ") and (", " + day + " ·") in fr and ev(page, "document.getElementById('liveDot').className") == "dot stale", fr)
+    page.click("#brief")
+    done_speaking(page)
+    sp = " ".join(ev(page, "window.__spoken"))
+    wd = ev(page, "new Date(window.__snapAt).toLocaleDateString(undefined, {weekday: 'long'})")
+    check("the brief says when the copy is from", "As of " in sp and (" on " + wd + ":") in sp, sp[:140])
+    snap = ask(page, "anything new?")["input"][0]["content"]
+    check("Claude is told how old the copy is", "Sessions copy taken 1 day ago" in snap)
+    ctx.close()
+
+    print("storage problems")
+    ctx, page, logs = open_page(browser, mode="nodb")
+    page.wait_for_function("() => !document.getElementById('banner').hidden && document.querySelectorAll('#routines .line').length === 4")
+    check("no storage in this view: says so, sections don't pretend, routines still load",
+          "storage isn't available" in page.inner_text("#bannerText") and "Not available right now." in page.inner_text("#waiting"))
+    page.click("#brief"); page.wait_for_function("() => window.__spoken.length > 0")
+    check("Brief me still works and is honest about it", "can't see your sessions" in " ".join(ev(page, "window.__spoken")))
+    ctx.close()
+
+    ctx, page, logs = open_page(browser)
+    live(page)
+    ev(page, "window.__dbError('unavailable')")
+    page.wait_for_function("() => !document.getElementById('noteSessions').hidden")
+    check("a dropped connection to the copy keeps what's shown and says it's reconnecting",
+          "Reconnecting" in page.inner_text("#noteSessions") and page.inner_text("#cWait") == "3")
+    page.wait_for_function("() => document.getElementById('noteSessions').hidden", timeout=8000)
+    check("…then reconnects by itself", ev(page, "window.__dbPaths.length") == 2)
     ctx.close()
 
     ctx, page, logs = open_page(browser, mode="nomcp")
-    page.wait_for_function("() => !document.getElementById('banner').hidden")
-    check("no connector access in this view: says so, sections don't pretend",
-          "Live data isn't available in this view" in page.inner_text("#bannerText") and "Not available right now." in page.inner_text("#waiting"))
-    page.click("#brief"); page.wait_for_function("() => window.__spoken.length > 0")
-    check("Brief me still works and is honest about it", "can't see your sessions" in " ".join(ev(page, "window.__spoken")))
+    page.wait_for_function("() => !document.getElementById('noteRoutines').hidden && document.getElementById('cWait').textContent === '3'")
+    check("no connector in this view: routines say so, sessions still show from the copy, no Refresh button",
+          "Live data isn't available in this view" in page.inner_text("#noteRoutines") and page.is_hidden("#refresh") and page.is_hidden("#banner"))
     ctx.close()
 
     ctx, page, logs = open_page(browser, mode="nosample")
@@ -408,7 +525,7 @@ with sync_playwright() as pw:
     live(page)
     bg = ev(page, "getComputedStyle(document.body).backgroundColor")
     check("dark theme applies", bg == "rgb(19, 16, 25)", bg)
-    page.screenshot(path=f"{SCR}/jarvis_v2_dark.png", full_page=True)
+    page.screenshot(path=f"{SCR}/jarvis_v3_dark.png", full_page=True)
     ctx.close()
     ctx, page, logs = open_page(browser, width=390)
     live(page)
@@ -418,7 +535,7 @@ with sync_playwright() as pw:
     check("phone: the Ask box is 16px so iOS doesn't zoom when you tap it", fs == "16px", fs)
     w = ev(page, "document.querySelector('#routines .lt').getBoundingClientRect().width")
     check("phone: routine names get the full row (time moves under the name)", w > 250, w)
-    page.screenshot(path=f"{SCR}/jarvis_v2_phone.png", full_page=True)
+    page.screenshot(path=f"{SCR}/jarvis_v3_phone.png", full_page=True)
     ctx.close()
     browser.close()
 
