@@ -29,10 +29,10 @@ Brief me still works.
 routines list: pause, reschedule or delete it there. Each run is a short Claude Code session on
 your usage. If it's renamed, the page's Refresh button can't find it and says so.
 
-**Setup gap (2 Oct 2026):** routines created from a Claude session can't carry connectors on
-this account, so the routine's sessions start without the Claude Code Remote tools and can't
-list sessions. The connector has to be added to the routine in the claude.ai routines editor.
-Until then the page says "No sessions copy yet" and everything else works.
+**Outcome (2 Oct 2026):** the claude.ai routines editor offers no connectors on this account,
+so the refresh routine couldn't list sessions (4 runs, nothing saved). The routine was deleted.
+On this account Jarvis can't show sessions: it shows routines (live) and does the brief. For
+what's waiting on you, use the session list in the Claude app.
 
 ## Rules it uses
 
