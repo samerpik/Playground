@@ -29,8 +29,9 @@ Brief me still works.
 routines list: pause, reschedule or delete it there. Each run is a short Claude Code session on
 your usage. If it's renamed, the page's Refresh button can't find it and says so.
 
-**Outcome (2 Oct 2026):** the claude.ai routines editor offers no connectors on this account,
-so the refresh routine couldn't list sessions (4 runs, nothing saved). The routine was deleted.
+**Outcome (2–3 Oct 2026):** the claude.ai routines editor offers the account's other
+connectors (Gmail, Slack, Google Drive…) but not Claude Code Remote, so the refresh routine
+couldn't list sessions (4 runs, nothing saved). The routine was deleted.
 On this account Jarvis can't show sessions: it shows routines (live) and does the brief. For
 what's waiting on you, use the session list in the Claude app.
 
