@@ -31,7 +31,12 @@ your usage. If it's renamed, the page's Refresh button can't find it and says so
 
 **Outcome (2–3 Oct 2026):** the claude.ai routines editor offers the account's other
 connectors (Gmail, Slack, Google Drive…) but not Claude Code Remote, so the refresh routine
-couldn't list sessions (4 runs, nothing saved). The routine was deleted.
+couldn't list sessions (5 runs, nothing saved). The routine was deleted.
+
+**Correction (13 Oct 2026):** routines *can* carry Claude Code Remote. The account's other
+routines, created from other sessions, have it attached. The Jarvis routine lacked it only because
+the session that created it couldn't pass connectors. Whether a routine's session can then call
+`list_sessions` and write the copy is untested.
 On this account Jarvis can't show sessions: it shows routines (live) and does the brief. For
 what's waiting on you, use the session list in the Claude app.
 
